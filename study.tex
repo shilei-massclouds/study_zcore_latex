@@ -1,5 +1,5 @@
 \documentclass[
-11pt, % Set the default font size, options include: 8pt, 9pt, 10pt, 11pt, 12pt, 14pt, 17pt, 20pt
+8pt, % Set the default font size, options include: 8pt, 9pt, 10pt, 11pt, 12pt, 14pt, 17pt, 20pt
 %t, % Uncomment to vertically align all slide content to the top of the slide, rather than the default centered
 %aspectratio=169, % Uncomment to set the aspect ratio to a 16:9 ratio which matches the aspect ratio of 1080p and 4K screens and projectors
 ]{beamer}
@@ -21,8 +21,8 @@
 %----------------------------------------------------------------------------------------
 %	PRESENTATION INFORMATION
 %----------------------------------------------------------------------------------------
-\title{参与研究zCore的初步想法}
-\institute[Massclouds]{乾云科技}
+\title{参与研究安全操作系统的初步想法}
+\institute[Massclouds]{\large 乾云科技}
 %----------------------------------------------------------------------------------------
 
 \begin{document}
@@ -39,11 +39,11 @@
 	%----------------------------------------------------------------------------------------
 	\begin{frame}
 		\frametitle{目标}
-		从zCore起步，参与安全操作系统的研究工作：
+		{\large 从zCore起步，参与安全操作系统的研究工作：}
 		\begin{itemize}
-			\item 发展一个面向AIoT领域的安全操作系统，以RISCV为主要目标体系结构，向上提供与Zircon保持同步的系统调用接口 以及 与Linux kernel保持兼容的系统调用接口。
-			\item 以Rust-lang为主要的实现语言，架构上参照Zircon的整体架构设计，具体细节参照Linux kernel(arch/riscv)。
-			\item 通过开源社区的方式组织研究和开发，建立各层面开发者参与协作的通道，建立应用层面使用者的反馈通道。
+			\item {\large 发展一个面向AIoT领域的安全操作系统，以RISCV为主要目标体系结构，向上提供与Zircon保持同步的系统调用接口 以及 与Linux kernel保持兼容的系统调用接口。}
+			\item {\large 以Rust-lang为主要的实现语言，架构上参照Zircon的整体架构设计，具体细节参照Linux kernel(arch/riscv)。}
+			\item {\large 通过开源社区的方式组织研究和开发，建立各层面开发者参与协作的通道，建立应用层面使用者的反馈通道。}
 		\end{itemize}
 	\end{frame}
 
@@ -51,13 +51,37 @@
 	%	TABLE OF CONTENTS SLIDE
 	%----------------------------------------------------------------------------------------
 	\begin{frame}
-	\frametitle{纲要}
+		\frametitle{纲要}
 		\tableofcontents
 	\end{frame}
 
 	%----------------------------------------------------------------------------------------
 	%	PRESENTATION BODY SLIDES
 	%----------------------------------------------------------------------------------------
+	\section{zCore学习过程和疑问}
+	
+	\subsection{引导阶段}
+	
+	\begin{frame}
+		\frametitle{1 入口\_start}
+		\begin{enumerate}
+			\item 通过select\_stack为primary hart查找和配置内核栈，为函数调用作准备
+			\begin{block}{}
+			建议这里不必按照固定的最大值（MAX\_HART\_NUM）为所有的harts预分配页。此时还不知道Harts的总数。可以只为primary hart在bss中预分配栈，等primary hart初始化过程中确定harts数量之后，再按需分配。启动secondary harts可以改一下，把它们的启动时机推后，具体想法后面会提到。
+			\end{block}
+			\item 进入primary hart的启动函数primary\_rust\_main
+			\item 清零BSS段
+			\item 初始化页表，为切换到虚拟空间作准备(见2)
+			\item 检查设备树dtb有效性
+			\item 启动secondary harts(见3)
+			\item 进入下阶段primary初始化
+		\end{enumerate}
+	\end{frame}
+	
+	%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	%	Demo
+	%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
 	\section{Text Examples}
 
 	\subsection{Paragraphs and Lists}
