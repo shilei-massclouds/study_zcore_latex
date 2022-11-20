@@ -45,6 +45,7 @@
 			\item {\large 以Rust-lang为主要的实现语言，架构上参照Zircon的整体架构设计，具体细节参照Linux kernel(arch/riscv)。}
 			\item {\large 通过开源社区的方式组织研究和开发，建立各层面开发者参与协作的通道，建立应用层面使用者的反馈通道。}
 		\end{itemize}
+		{\large 下面就目前进行的准备工作和对将来工作的设想做一个汇报：}
 	\end{frame}
 
 	%----------------------------------------------------------------------------------------
@@ -77,7 +78,266 @@
 			\item 进入下阶段primary初始化
 		\end{enumerate}
 	\end{frame}
-	
+
+	\begin{frame}
+		\frametitle{2 启动阶段页表设置boot\_page\_table}
+		\begin{enumerate}
+			\item 设置物理地址与虚拟地址相等的跳板页
+			\item 从虚存开始地址映射物理空间的前128G
+			\item 基于SV39模式启用mmu
+			\begin{block}{}
+				目前zCore是固定采用sv39的模式。可以借鉴Linux kernel的方式，通过写后读轮流尝试sv57,sv48来自动检测所在硬件平台支持的最大模式。
+			\end{block}
+			\item 调整栈寄存器sp和返回地址寄存器ra，完成从物理空间到虚拟空间转换
+			\item 设置状态寄存器，从此允许kernel访问User页面
+			\begin{block}{}
+				建议采取保守策略，默认情况下始终不开，即默认不允许内核直接访问用户页面，仅在必须执行kernel/user之间内存拷贝或设置的时候，再临时打开，操作完后随即关闭。
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{3 启动Secondary Harts}
+		\begin{enumerate}
+			\item 检查sbi是否支持HSM扩展，不支持则退化为单核系统
+			\begin{block}{}
+				HSM是OpenSBIv0.7之后才支持，可以考虑参考Linux kernel for riscv的处理方式：\\
+				(1)这里不检查HSM的支持。\\
+				(2)把那个Atomic全局变量STARTED提前到\_start入口位置，用它保证只有一个Hart能通过，其它在STARTED变量spin等待。那个唯一能通过的就是Primary Hart。\\
+				(3)Primary Hart启动各secondary harts时，如支持HSM，就如当前的办法用SBI唤醒；不支持的，打开STARTED的封锁。
+			\end{block}
+			\item 遍历设备树文件dtb，发现primary之外所有的hart，通过SBI启动它们，执行secondary的启动流程(见4)。
+			\begin{block}{}
+				感觉这里就启动secondary harts有点早了，一是这里需要单独处理dtb，其它几处还有单独处理dtb的地方，代码有点分散；二是启动了后面也没有真正运行，还是要等primary的信号。
+				建议由Primary Hart在一处统一处理dtb，生成各种管理结构，包括Harts对象数组，然后为所有secondary harts准备好栈，再kick它们。
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{4 Secondary Hart的启动流程}
+		\begin{enumerate}
+			\item 设置栈：zCore直接用hartid这个硬件ID作为CPU的编号，用它来对应包括系统栈在内的各种CPU专属资源。
+			\begin{block}{}
+				直接利用hartid作为CPU编号有点问题。
+				按照Riscv规范【The RISC-V Instruction Set Manual - Volume II: Privileged Architecture】3.1.5节：
+				至少有一个HART的hartid是零，但并不要求所有hartid是连续的。实现策略由厂商自行决定。
+				由于不能保证hartid是从零开始的连续数值区间，所以当索引不合适。建议按照通常做法，维护一个CPU数组，CPU在数组的位置即逻辑ID作为CPU资源的索引。
+			\end{block}
+			\item zCore占用TP寄存器来维持hartid。
+			\begin{block}{}
+				对每个hart来说，0号系统寄存器就是harid只读寄存器，不必再占用tp寄存器。tp可以用来保持cpu逻辑ID或者直接保存对应percpu的引用指针。
+			\end{block}
+			\item 通过循环实现HART对应内核栈的定位。
+			\begin{block}{}
+				应该用索引+移位实现就可以吧？
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{4 Secondary Hart的启动流程}
+		\begin{enumerate}
+			\item 启用分页
+			\item 逐级进入secondary主函数secondary\_main，最后通过HAL的方法完成初始化
+			\item 执行HAL初始化：通过kernel\_hal::secondary\_init
+			\item 初始化本Hart的根中断控制器intc
+			\item 初始化平台级中断控制器plic
+			\begin{block}{}
+				把plic放到secondary hart的初始化过程中不合适，如前所述，如果SBI不支持HSM，就不仅是退化到单核的问题，连设备中断也没有了。
+				这个plic是平台级的，只需要初始化一次，建议还是由primary hart初始化为妥。
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{5 primary\_main主函数}
+		\begin{block}{}
+			建议用一个Context包装原本的全局变量，在此处定义后(是局部变量)，作为参数一直传递下去，直至准备启动secondary harts
+			在准备启动secondary harts前，释放掉不再需要的，其它的用ARC和Mutex封装后clone，传递给那些secondary harts
+		\end{block}
+		\begin{enumerate}
+			\item 日志初始化
+			\item 内存初始化
+			\item HAL层对primary hart的早期初始化
+			\item 把从dtb中发现的可用内存范围加入到系统堆中
+			\item HAL层对primary hart的正式初始化
+			\item 唤醒所有处于等待状态的secondary harts
+			\begin{block}{}
+				primary hart在唤醒secondary hart之前应该先使用内存屏障，毕竟secondary将要使用的内存数据都是primary给它准备的，需要确保其启动时可见。
+				从实现看hart\_start并没有包含内存屏障，所以建议封装一下该函数，发出sbi调用之前强制加上fence(iorw,iorw)。这样比较保险。
+			\end{block}
+			\item 通过loader启动Linux环境：展开文件系统，加载并启动第一个程序，默认shell
+			\item 通过loader启动Zircon环境：这个对baremetal riscv平台没有实现(boot\_library宏目前不支持)
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{6 memory管理}
+		\begin{enumerate}
+			\item 初始化全局的HEAP，类型BuddyAllocator，rust用global\_allocator进行标记：\\
+			BuddyAllocator的实现与Linux kernel的page\_alloc中定义的Buddy系统基本一致。
+			模板参数N指定Order桶的数量(27个)，桶采用单链表结构，此外用USIZE实现位图标记各级桶的空闲/占用情况。
+			\item 填充内存给全局HEAP
+			\item 在内核数据段中预先保留一段内存区域，调用transfer方法转给全局的HEAP，内部是调用BuddyAllocator的回收方法deallocate来实现的。
+			\item 回收方法deallocate：\\
+			与linux kernel实现类似：从待回收页块所在的Order开始，逐级向上检测它的伙伴块是否已经是空闲的。
+			如果空闲，合并后向上级Order迭代此过程；否则，直接插入到当前Order，完成回收过程。
+			实现特色是，顶级Order的块因为不合并，加入寡头链特殊处理了。
+			\item 分配方法：与linux kernel实现类似
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{6 memory管理}
+		\begin{enumerate}
+			\item KernelMemInfo【zCore/src/platform/riscv/consts.rs】\\
+			用于提供内核虚存空间到物理地址空间的偏移值。
+			\begin{block}{}
+				初始化时用了固定数值0xffff\_ffc0\_8020\_0000作为vaddr\_base，我理解可以分解成三个值：\\
+				(1)内核在虚拟内存空间中的开始地址 ≈ 0xffff\_ffc0\_0000\_0000，这个值应该参数化。目前这个值适用于SV39，将来采用其它mmu模式，它也需要相应改变。\\
+				(2) 0x8000\_0000这个值应该是利用RISCV平台的一个惯例，RAM的物理空间地址通常就是它。
+				这样计算va\_pa\_offset时可以消掉这个8，达成一个1G对齐的偏移，简化启动阶段页表初始化。但是这个惯例不是强制规范，依赖它可能导致一些意外。\\
+				(3) 0x20\_0000即RiscV64系统需要把Kernel image加载到RAM开始地址后面2M处，这个应该是SBI规范所规定的。
+				既然上面第2条不可靠，建议参照Linux kernel 和 zircon的通常做法，直接把第1条的那个值参数化后，作为vaddr\_base。
+				此外，初始化页表时应该以PMD的尺寸为粒度，PMD size是2M，符合第3条，可以保证对齐要求。
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{7 primary\_init\_early：解析设备树文件DTB，设置系统参数}
+		\begin{enumerate}
+			\item 系统命令行参数，即cmdline，来自dtb.chosen.bootargs
+			\item CPU的时钟主频，后面设置定时器等时间相关操作时能用到
+			\item 如果initrd存在，它在物理空间中占据的范围
+			\item 可用的内存（基本上就是RAM）在物理空间中的范围。\\
+			通常都是从0x8000\_0000开始。
+			有可能存在多个不连续区间，所以需要用vec一类的数组或链来管理
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{8 Primary正式初始化：HAL::primary\_init}
+		\begin{enumerate}
+			\item 虚拟内存初始化vm::init：\\
+			映射kernel image占据的物理空间范围到虚拟内存空间。\\
+			(1)解析kernel image在物理空间中各段的位置(code, data, etc.)\\
+			(2)对各段执行线性偏移映射，各段中间可能有空洞，最后应该需要特殊处理以提高安全性。
+			\item 内核驱动的初始化
+			\item 遍历DTB发现所有的设备，把如下类型的设备加入管理列表\\
+			Uart，PCI，intc，Display和Net
+			\item 根中断控制器intc的初始化：\\
+			根中断控制器intc是Hart内置的中断控制器，接入三类中断：
+			(1)时钟中断：该中断是通过SBI从Machine模式转过来的，最主要的作用是协助调度器实现时间片资源管理。
+			(2)软件中断：也是通过SBI从Machine模式转过来的，用于实现IPI。
+			(3)外部中断：经由平台级中断控制器Plic的仲裁分配。
+			\item 为时钟中断和软件中断注册handler：\\
+			对于时钟中断，每次发生中断时，都要通过SBI重置定时器，使之在固定的周期后再次触发。
+			\item 允许时钟中断和软件中断：就是在寄存器SIE上置相应位。
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{9 建立linux环境，启动第一个进程}
+		\begin{enumerate}
+			\item 创建Job、Process、Thread三级执行体
+			\item 基于LinuxELF格式解析器，解析第一个程序(默认是busybox?sh)，返回程序入口地址entry和用户栈指针位置
+			\item 启动Thread从entry开始执行\\
+			(1)zCore特点：用户进程/线程基于async机制实现，所以这个entry被封装成一个future
+			(2)启动用户线程就变成了把上述future加入到执行器executor中，具体的执行调度在PreemptScheduler中实现
+			\item 为时钟中断和软件中断注册handler：\\
+			对于时钟中断，每次发生中断时，都要通过SBI重置定时器，使之在固定的周期后再次触发。
+			\item 允许时钟中断和软件中断：就是在寄存器SIE上置相应位。
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{10 PreemptScheduler}
+		\begin{enumerate}
+			\item 核心数据结构RutimeExecutor:\\
+			每个Hart对应一个runtime(RutimeExecutor类型)，作用相当于linux kernel的idle kthread。
+			\begin{block}{}
+			zCore目前是根据固定数量来初始化runtime。
+			前面已经根据dtb信息获知实际Hart的数量，并建立了对应的hart数组，
+			所以这里可以根据实际数量来初始化runtime并作为资源纳入对应的hart进行管理，不必定义全局变量。
+			\end{block}
+			\item spawn生成一个由future包装的线程并加入待调度列表
+			\item 在关中断的条件下运行
+			\item 找到当前Hart的runtime，把该future加入到runtime的任务列表中
+			\item wait\_until\_idle:\\
+			开始执行调度，strong\_executor强执行器具备高优先级，用于执行当前future，但是如果没能在一个时间片内完成，就会被时钟中断打断运行，降级为weak\_executor；
+			weak\_executor只会在没有strong\_executor时才能得到机会执行。通过strong/weak executor以及时钟中断(调用handle\_timeout)之间的协作，实现可抢占的调度。
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{10 PreemptScheduler}
+		\begin{enumerate}
+			\item wait\_for\_interrupt:\\
+			\begin{block}{}
+				在开中断前加内存屏障fense(iorw, iorw)
+			\end{block}
+			\item 保存当前中断状态，开中断
+			\begin{block}{}
+				当前实现是分别使用读sstatus状态和set\_sie两个操作来完成。
+				实际上set\_sie封装的指令CSRRS，是一个设置新值同时返回旧值的原子操作，crate riscv实现时忽略了返回值。我们可以修改一下其实现。
+			\end{block}
+			\item 进入等待状态，直到有中断发生时被唤醒。
+			\item 恢复等待前的中断状态
+			\item switch:\\
+			执行器executor之间通过switch实现切换，从这个角度，执行器就等同于Linux kernel的一个kthread，切换的机制相同。
+			\begin{block}{}
+				Switch入口处需要加内存屏障fence(iorw, iorw)。
+				即在当前执行体被切换出去之前，自己清算一下内存操作，让其它执行体可见。
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{杂项}
+		\begin{enumerate}
+			\item Rust的内存屏障core::sync::atomic::fence\\
+			\begin{block}{}
+				这个函数不能用，通过反汇编发现，即使传入SeqCst参数，也只能产生fence(rw,rw)的指令，而我们通常需要的是fence(iorw,iorw)。
+				所以需要用asm自己封装。
+			\end{block}
+			\item Panic\\
+			\begin{block}{}
+				我们通常会用qemu来调试，遇到panic时qemu不会自己退出，还要输入ctl+A+X，写测试脚本时不方便。
+				建议在panic中把spin\_loop无限循环改为关机（sbi.legacy.shutdown或者srst.system\_reset with RESET\_TYPE\_SHUTDOWN)，这样panic就可以让qemu退出。
+			\end{block}
+			\item TicketMutex[kernel-sync/ticket.rs]
+			\begin{block}{}
+				对self.next\_ticket的操作缺少内存屏障，既然lock中fetch\_add和is\_locked中的load都是Ordering::Relaxed，
+				那么某些cpu在调用is\_locked时，可能会取到next\_ticket的陈旧值。
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{关于GP寄存器}
+		没有发现zCore内核里面用GP寄存器relaxing机制，建议可以参照linux kernel用一下这个riscv特色。
+		linker.ld中.data和.bss段之间定义一个\_\_global\_pointer\$
+		然后入口处启用paging前后各初始化一次gp寄存器
+		此外，外部crate trapframe在异常入口位置也要加一下，就在保存S态系统寄存器之后的位置
+		\begin{quote}
+			\# save sp, sstatus, sepc\\
+			… …\\
+			STORE\_SP t2, 33         \# save sepc\\
+			\vspace {8pt} 
+			/* Load the global pointer */\\
+			.option push\\
+			.option norelax\\
+			la gp, \_\_global\_pointer\$\\
+			.option pop\\
+			\vspace {8pt} 
+			andi t1, t1, 1 << 8     \# sstatus.SPP = 1\\
+			beqz t1, end\_trap\_from\_user\\
+			end\_trap\_from\_kernel:
+		\end{quote}
+	\end{frame}
+
 	%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	%	Demo
 	%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
