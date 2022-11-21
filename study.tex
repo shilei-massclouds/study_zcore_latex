@@ -15,6 +15,7 @@
 
 \usepackage{palatino}
 \usepackage[default]{opensans}
+\usepackage{makecell}
 
 \useinnertheme{circles}
 
@@ -26,6 +27,7 @@
 %----------------------------------------------------------------------------------------
 
 \begin{document}
+	\renewcommand\arraystretch{2}
 
 	%----------------------------------------------------------------------------------------
 	%	TITLE SLIDE
@@ -360,7 +362,10 @@
 
 	\begin{frame}
 		\frametitle{Zircon总体流程}
-		ARM64体系结构 - generic-arm平台 - 10月8日版本
+		\begin{figure}
+			\includegraphics[width=1.0\linewidth]{zircon_flow.png}
+			\caption{Zircon总体流程图}
+		\end{figure}
 	\end{frame}
 
 	\subsection{入口\_start}
@@ -398,13 +403,24 @@
 			\item 初始化早期内存分配器boot allocator\\
 			两个成员start和end标记已分配区域的开始和结束地址。
 			目前还没有分配，所以start/end都设置成kernel image的结束地址\_end，这个也是传统上堆的开始处。
-			\item 初始化根页目录，在虚拟地址空间中线性偏移映射两个地址区间\\
-			(1)整个物理地址空间映射到虚拟地址空间的固定位置\\
+			\item 初始化根页目录，在虚拟地址空间中线性偏移映射两个地址区间
+			\item 整个物理地址空间映射到虚拟地址空间的固定位置\\
 			参数KERNEL\_ASPACE\_BASE指定虚拟空间位置，0~ARCH\_PHYSMAP\_SIZE指定被映射的物理空间范围。在Arm64 ISA，ARCH\_PHYSMAP\_SIZE是512G，所以实质上是整个物理空间。
 			映射区域标识为MMU\_PTE\_KERNEL\_DATA\_FLAGS，即只允许读写。
-			(2)内核本身占据的物理空间映射到虚拟地址空间的固定位置（由参数KERNEL\_BASE决定）\\
+			\item 内核本身占据的物理空间映射到虚拟地址空间的固定位置（由参数KERNEL\_BASE决定）\\
 			映射区域标识为MMU\_PTE\_KERNEL\_RWX\_FLAGS，因为包含代码和数据，所以允许读写执行。
-			(3)由此在Boot阶段将形成如下的映射布局。内核image在虚拟空间中会被同时映射到两个区间，但是访问权限不同。
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{1 入口\_start【kernel/arch/arm64/start.S】}
+		\begin{enumerate}\setcounter{enumi}{8}
+			\item 由此在Boot阶段将形成如下的映射布局。内核image在虚拟空间中会被同时映射到两个区间，但是访问权限不同。
+			\begin{figure}
+				\includegraphics[width=0.6\linewidth]{zircon_aspace.png}
+				\caption{Zircon空间映射布局}
+			\end{figure}
+		
 			\begin{block}{}
 				可以借鉴zircon这个办法：规划时先定分页模式(默认4级页表，相当于RISCV的SV48) ，再根据模式定参数(KERNEL\_BASE和KERNEL\_ASPACE\_BASE)，划分出各区域；
 				实现中通过kernel vmar管理该布局。
@@ -472,6 +488,16 @@
 			\begin{block}{}
 				zCore目标平台采取NUMA的可能性不大，可忽略Node；但是仍可能存在多个Arena，所以保留mem\_arena数组，上限数量16应该是充足的。
 			\end{block}
+			\begin{figure}
+				\includegraphics[width=0.3\linewidth]{zircon_pmm.png}
+				\caption{Zircon物理内存管理概念}
+			\end{figure}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{2 C入口lk\_main}
+		\begin{enumerate}\setcounter{enumi}{8}
 			\item Peripheral：映射到Kernel image之前的区域中，即KERNEL\_BASE之前。上限4个。
 			\item Reserve：其它系统保留用途的内存区域，加入rev\_list。
 			\item 解析命令行，处理针对debuglog和串口的参数。查看是否需要执行物理内存扫描检查。
@@ -792,208 +818,117 @@
 		\end{enumerate}
 	\end{frame}
 
-	%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-	%	Demo
-	%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	\section{对zCore组织研究开发的建议}
 	
 	\begin{frame}
-		\frametitle{X XXX}
+		\begin{center}
+			{\LARGE 对zCore组织研究开发的建议\\}
+		\end{center}
+	\end{frame}
+
+	\subsection{zCore项目结构调整建议}
+	
+	\begin{frame}
+		\frametitle{zCore项目结构调整建议}
 		\begin{enumerate}
-			\item XXXX
-			\begin{block}{}
-				XXXX
-			\end{block}
-			\item XXXX
+			\item 建议分别设立arch与platform两种目录
+			Zircon对这两种目录是区别对待的：\\
+			(1)arch：对应体系结构，包含arm64和x86。这里面处理是特定于cpu指令架构的东西。\\
+			(2)platform: 对应于平台，涉及总线及外设标准。包括两类：\\
+			generic-arm是对应终端、嵌入式设备等soc平台；而pc对应的是传统的个人电脑或工作站。
+			arch和platform两个维度可以正交，搭配出不同的组合。
+			例如，同一种arch可以配套不同的platform，而同一种platform也可以搭配不同的arch。
+			\item 建议取消kernel-hal\\
+			zCore当前源码中，条件编译的地方是比较多的，似乎kernel-hal并未起到很好的隔离作用，而且采用这种方式把代码隔成两块，在阅读维护代码时感觉不太顺畅。
+			建议借鉴zircon的处理方式：
+			参照上一条的建议，把kernel-hal的代码以及zCore主项目中条件编译的代码区分一下，分别安排到arch和platform目录下。
+			参照zircon在初始化阶段建立静态和动态hook机制，把arch和platform目录下的代码转换为实现对应阶段的静态hook或注册为动态hook。
+			\item 建议把libos放到platform下面，作为一种特殊的平台处理
 		\end{enumerate}
 	\end{frame}
 
-	\section{Text Examples}
-
-	\subsection{Paragraphs and Lists}
-
+	\subsection{基于开源社区组织zCore研发的建议}
+	
 	\begin{frame}
-	\frametitle{Paragraphs of Text}
-
-	Sed iaculis \alert{dapibus gravida}. Morbi sed tortor erat, nec interdum arcu. Sed id lorem lectus. Quisque viverra augue id sem ornare non aliquam nibh tristique. Aenean in ligula nisl. Nulla sed tellus ipsum. Donec vestibulum ligula non lorem vulputate fermentum accumsan neque mollis.
-
-	\bigskip % Vertical whitespace
-
-	\begin{quote}
-		Sed diam enim, sagittis nec condimentum sit amet, ullamcorper sit amet libero. Aliquam vel dui orci, a porta odio.\\
-		--- Someone, somewhere\ldots
-	\end{quote}
-
-	\bigskip % Vertical whitespace
-
-	Nullam id suscipit ipsum. Aenean lobortis commodo sem, ut commodo leo gravida vitae. Pellentesque vehicula ante iaculis arcu pretium rutrum eget sit amet purus. Integer ornare nulla quis neque ultrices lobortis.
+		\frametitle{基于开源社区组织zCore研发的建议}
+		\begin{enumerate}
+			\item 目的：\\
+			通过开源的方式组织安全操作系统的研究和开发，打开从底层硬件到上层应用各层次专业人员协作参与的通道，
+			打开各种应用环境下和测试环境下用户反馈的通道，形成持续改进的闭环。
+			\begin{figure}
+				\includegraphics[width=1.0\linewidth]{open_community.png}
+			\end{figure}
+			\item 组织：\\
+			初期两级构成：一级维护者+贡献者。维护者不少于3人，在实际的社区运行中，逐渐形成维护者团队。
+			\item 设施：\\
+			开发协作主要基于传统的开发者邮件列表(maillist)，这个应该比较符合多数系统软件开发者的习惯。
+			接受用户反馈可以选择采用论坛或邮件列表的方式，维护者轮班负责收集归纳反馈和回复有代表性的用户问题。
+			\item 机制：\\
+			(1)审核机制：两个reviewed-by过关；\\
+			(2)发版机制：三个月一个版本，其中两个月开放期，一个月封闭测试期。
+		\end{enumerate}
 	\end{frame}
 
-	\subsection{Blocks}
+	\subsection{基于zCore可能展开的研究方向的建议}
 	
 	\begin{frame}
-		\frametitle{Blocks of Highlighted Text}
-		
-		\begin{block}{Block Title}
-			Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer lectus nisl, ultricies in feugiat rutrum, porttitor sit amet augue.
-		\end{block}
-		
-		\begin{exampleblock}{Example Block Title}
-			Aliquam ut tortor mauris. Sed volutpat ante purus, quis accumsan.
-		\end{exampleblock}
-		
-		\begin{alertblock}{Alert Block Title}
-			Pellentesque sed tellus purus. Class aptent taciti sociosqu ad litora torquent per conubia nostra, per inceptos himenaeos.
-		\end{alertblock}
-		
-		\begin{block}{} % Block without title
-			Suspendisse tincidunt sagittis gravida. Curabitur condimentum, enim sed venenatis rutrum, ipsum neque consectetur orci.
-		\end{block}
+		\frametitle{基于zCore可能展开的研究方向的建议}
+		\begin{enumerate}
+			\item RUST语言对系统级开发的支持\\
+			总结在基于rust研发zCore过程中的经验，研究并提出rust改进方案，参与rust社区在支持系统级开发方面的工作。
+			\item 基于RISCV体系结构的软硬件协同设计\\
+			RISCV作为一种开放式的体系架构，支持对其进行非标准扩展。
+			根据zCore的目标，重点针对安全性和关键性能方面，研究软硬件协同的设计方案，研究通过扩展ISA和硬件辅助提升安全性和性能的关键技术与实现。
+			\item 线程+异步混合调度机制\\
+			线程和异步各有自身特点和适用场景，不是替代关系。研究zCore同时支持这两种机制的方案。
+			\item “元编程”在系统级开发中的应用
+			基于zCore开发的实践，研究通过Rust语言的宏在高抽象层次表述对象的方法，研究形式化方法在系统设计和验证中的的应用。减少冗余代码，提高一致性和开发者的开发效率。
+		\end{enumerate}
 	\end{frame}
 
-	\subsection{Columns}
+	\subsection{对zCore研发里程碑的补充建议}
 	
 	\begin{frame}
-		\frametitle{Multiple Columns}
-		\framesubtitle{Subtitle} % Optional subtitle
+		\frametitle{对zCore研发里程碑的补充建议}
 		
-		\begin{columns}[c] % The "c" option specifies centered vertical alignment while the "t" option is used for top vertical alignment
-			\begin{column}{0.45\textwidth} % Left column width
-				\textbf{Heading}
-				\begin{enumerate}
-					\item Statement
-					\item Explanation
-					\item Example
-				\end{enumerate}
-			\end{column}
-			\begin{column}{0.5\textwidth} % Right column width
-				Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer lectus nisl, ultricies in feugiat rutrum, porttitor sit amet augue. Aliquam ut tortor mauris. Sed volutpat ante purus, quis accumsan dolor.
-			\end{column}
-		\end{columns}
-	\end{frame}
-
-	\section{Table and Figure Examples}
-	
-	\subsection{Table}
-	
-	\begin{frame}
-		\frametitle{Table}
-		\framesubtitle{Subtitle} % Optional subtitle
-		
-		\begin{table}
-			\begin{tabular}{l l l}
-				\toprule
-				\textbf{Treatments} & \textbf{Response 1} & \textbf{Response 2}\\
-				\midrule
-				Treatment 1 & 0.0003262 & 0.562 \\
-				Treatment 2 & 0.0015681 & 0.910 \\
-				Treatment 3 & 0.0009271 & 0.296 \\
+		\begin{table}\resizebox{\linewidth}{!}{
+			\begin{tabular}{l l l l}
+				\toprule[2pt]
+				\textbf{2023 架构设计} & \textbf{2025 基本实现} & \textbf{2026 示范应用} & \textbf{2030 推广生态}\\
+				\midrule[1pt]
+				{创新操作系统架构} & {软硬件协同设计} & {突破卡脖子技术} & {操作系统全链突破} \\
+				\hline
+				\makecell[l]{\\提出基于Rust的异步可扩\\展操作系统架构，较现有\\OS提供更多层次的软件并行\\性表达能力，为构建自主\\可控IT生态奠定OS基础。\\} &
+				\makecell[l]{研制适配的无人系统/机器人\\的编程、编译与运行时系统，\\解决新型OS下的软件开发和\\运行问题。} &
+				\makecell[l]{OS可运行在主流处理器\\和新型处理器原型之上，\\移植典型示范应用，\\解决操作系统系统纵横向\\整合的生态问题。} &
+				\makecell[l]{研制成功安全高性能新型\\操作系统，并在实际产业\\中大规模使用，形成围绕\\操作系统的新产业生态。} \\
+				\hline
+				\makecell[l]{\\1 以RISCV为主平台，参照\\zircon的架构实现，调整完善\\zCore。\\
+							 2 开源社区的机制与设施建立，\\尝试运行。\\
+							 3 研究RUST语言对系统级\\开发的支持。\\
+							 4 研究线程+异步混合调度\\机制。} &
+				\makecell[l]{\\1 zCore支持Linux和zircon\\两种应用环境，两种系统调用\\接口完备，主流应用的运行\\性能与参照系统持平。\\
+							 2 开源社区维护者团队成熟，\\按照模块分工，测试系统完备，\\具备保障持续发版的能力。\\
+							 3 研究基于RISCV体系结构\\的软硬件协同设计。} &
+				\makecell[l]{1 zCore支持其它主流的体系\\架构，支持各国产化体系架构。\\
+							 2 开源社区维护团队形成多级\\结构，吸收各厂商和组织的人员\\作为外围维护者负责相应的\\体系结构模块或功能模块审核。\\
+							 3 研究元编程在系统级开发中\\的应用。} &
+				\makecell[l]{1 zCore根据AIoT的发展情况，\\面向当时需求旺盛的代表性应用\\场景，在操作系统层面具备良好\\的支持能力和快速改\\进能力。\\
+							 2 在操作系统领域，成为国际化\\开源社区。} \\
 				\bottomrule
 			\end{tabular}
-			\caption{Table caption}
+			}			
+			\caption{zCore研发里程碑}
 		\end{table}
 	\end{frame}
 
-	\subsection{Figure}
-	
-	\begin{frame}
-		\frametitle{Figure}
-		
-		\begin{figure}
-			\includegraphics[width=0.8\linewidth]{creodocs_logo.pdf}
-			\caption{Creodocs logo.}
-		\end{figure}
-	\end{frame}
-
-	\section{Mathematics}
-	
-	\begin{frame}
-		\frametitle{Definitions \& Examples}
-		
-		\begin{definition}
-			A \alert{prime number} is a number that has exactly two divisors.
-		\end{definition}
-		
-		\smallskip % Vertical whitespace
-		
-		\begin{example}
-			\begin{itemize}
-				\item 2 is prime (two divisors: 1 and 2).
-				\item 3 is prime (two divisors: 1 and 3).
-				\item 4 is not prime (\alert{three} divisors: 1, 2, and 4).
-			\end{itemize}
-		\end{example}
-		
-		\smallskip % Vertical whitespace
-		
-		You can also use the \texttt{theorem}, \texttt{lemma}, \texttt{proof} and \texttt{corollary} environments.
-	\end{frame}
-
-	\section{Referencing}
-	
-	\begin{frame}
-		\frametitle{Citing References}
-		
-		An example of the \texttt{\textbackslash cite} command to cite within the presentation:
-		
-		\bigskip % Vertical whitespace
-		
-		This statement requires citation \cite{p1,p2}.
-	\end{frame}
-	
-	%------------------------------------------------
-	
-	\begin{frame} % Use [allowframebreaks] to allow automatic splitting across slides if the content is too long
-		\frametitle{References}
-		
-		\begin{thebibliography}{99} % Beamer does not support BibTeX so references must be inserted manually as below, you may need to use multiple columns and/or reduce the font size further if you have many references
-			\footnotesize % Reduce the font size in the bibliography
-			
-			\bibitem[Smith, 2022]{p1}
-			John Smith (2022)
-			\newblock Publication title
-			\newblock \emph{Journal Name} 12(3), 45 -- 678.
-			
-			\bibitem[Kennedy, 2023]{p2}
-			Annabelle Kennedy (2023)
-			\newblock Publication title
-			\newblock \emph{Journal Name} 12(3), 45 -- 678.
-		\end{thebibliography}
-	\end{frame}
-
-	\begin{frame}
-		\frametitle{Acknowledgements}
-		
-		\begin{columns}[t] % The "c" option specifies centered vertical alignment while the "t" option is used for top vertical alignment
-			\begin{column}{0.45\textwidth} % Left column width
-				\textbf{Smith Lab}
-				\begin{itemize}
-					\item Alice Smith
-					\item Devon Brown
-				\end{itemize}
-				\textbf{Cook Lab}
-				\begin{itemize}
-					\item Margaret
-					\item Jennifer
-					\item Yuan
-				\end{itemize}
-			\end{column}		
-			\begin{column}{0.5\textwidth} % Right column width
-				\textbf{Funding}
-				\begin{itemize}
-					\item British Royal Navy
-					\item Norwegian Government
-				\end{itemize}
-			\end{column}
-		\end{columns}
-	\end{frame}
-
-	\begin{frame}[plain] % The optional argument 'plain' hides the headline and footline
+	\begin{frame}[plain]
 		\begin{center}
 			{\Huge The End}
 			
 			\bigskip\bigskip % Vertical whitespace
 			
-			{\LARGE Questions? Comments?}
+			{\LARGE 请老师们批评指正！}
 		\end{center}
 	\end{frame}
 
