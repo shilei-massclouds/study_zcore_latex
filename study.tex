@@ -60,7 +60,15 @@
 	%	PRESENTATION BODY SLIDES
 	%----------------------------------------------------------------------------------------
 	\section{zCore学习过程和疑问}
-	
+
+	\begin{frame}
+		\begin{center}
+			{\LARGE 对zCore的学习过程及疑问\\}
+			\bigskip\bigskip
+			{\large 仅针对BareMetal RISCV平台 - 9月15日版本}
+		\end{center}
+	\end{frame}
+
 	\subsection{引导阶段}
 	
 	\begin{frame}
@@ -338,9 +346,466 @@
 		\end{quote}
 	\end{frame}
 
+	\section{Zircon架构与实现参考}
+	
+	\begin{frame}
+		\begin{center}
+			{\LARGE 参照Zircon对zCore调整补充的建议\\}
+			\bigskip\bigskip
+			{\large Zircon(arm64 on generic-arm) - 10月8日版本}
+		\end{center}
+	\end{frame}
+
+	\subsection{Zircon总体流程}
+
+	\begin{frame}
+		\frametitle{Zircon总体流程}
+		ARM64体系结构 - generic-arm平台 - 10月8日版本
+	\end{frame}
+
+	\subsection{入口\_start}
+
+	\begin{frame}
+		\frametitle{1 入口\_start【kernel/arch/arm64/start.S】}
+		\begin{enumerate}
+			\item 根据cpuid判断当前cpu身份，0是primary cpu，其它是secondary
+			\item primary cpu负责启动工作，所以需要保存引导信息，包括：\\
+			handoff地址：上一阶段bootloader传递参数和数据块的开始地址；
+			内核入口\_start地址：kernel image的物理地址；
+			EL模式：Arm CPU运行级别；
+			\item 记录第一条指令的ticks计数作为时间戳\\
+			Zircon在各处设置时间戳，度量关键阶段的启动时间。
+			\begin{block}{}
+				在riscv ISA，我们通过SBI\_PMU\_HW\_CPU\_CYCLES实现。
+			\end{block}
+			\item 确保当前EL是1，即OS级别，否则切换到OS级
+			\begin{block}{}
+				zCore也应该检查一下是否S模式，如果意外当前是M模式，要定一个处置策略。
+			\end{block}
+			\item 启用icache和dcache：Riscv ISA不涉及
+			\item 把secondary cpus送去等待，等待primary cpu完成初始化再唤醒它们
+			\item 清零BSS
+			\item 为primary cpu设置内核栈，该栈在BBS段，长度两个页面
+			\begin{block}{}
+				如前面提到，zCore仿照该方式，预先只为primary准备栈，后面再按照CPU总数量，按需分配栈
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{1 入口\_start【kernel/arch/arm64/start.S】}
+		\begin{enumerate}\setcounter{enumi}{8}
+			\item 初始化早期内存分配器boot allocator\\
+			两个成员start和end标记已分配区域的开始和结束地址。
+			目前还没有分配，所以start/end都设置成kernel image的结束地址\_end，这个也是传统上堆的开始处。
+			\item 初始化根页目录，在虚拟地址空间中线性偏移映射两个地址区间\\
+			(1)整个物理地址空间映射到虚拟地址空间的固定位置\\
+			参数KERNEL\_ASPACE\_BASE指定虚拟空间位置，0~ARCH\_PHYSMAP\_SIZE指定被映射的物理空间范围。在Arm64 ISA，ARCH\_PHYSMAP\_SIZE是512G，所以实质上是整个物理空间。
+			映射区域标识为MMU\_PTE\_KERNEL\_DATA\_FLAGS，即只允许读写。
+			(2)内核本身占据的物理空间映射到虚拟地址空间的固定位置（由参数KERNEL\_BASE决定）\\
+			映射区域标识为MMU\_PTE\_KERNEL\_RWX\_FLAGS，因为包含代码和数据，所以允许读写执行。
+			(3)由此在Boot阶段将形成如下的映射布局。内核image在虚拟空间中会被同时映射到两个区间，但是访问权限不同。
+			\begin{block}{}
+				可以借鉴zircon这个办法：规划时先定分页模式(默认4级页表，相当于RISCV的SV48) ，再根据模式定参数(KERNEL\_BASE和KERNEL\_ASPACE\_BASE)，划分出各区域；
+				实现中通过kernel vmar管理该布局。
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{1 入口\_start【kernel/arch/arm64/start.S】}
+		\begin{enumerate}\setcounter{enumi}{10}
+			\item 准备跳板 页根目录，准备启用paging。这个机制与zCore目前一致。
+			\item 启用paging\\
+			Prmiary hart本身跳转到虚拟空间；然后通知secondary harts，跳板准备完毕，所有secondary harts启用分页后，又会进入spin状态，等待下一个唤醒信号。
+			\item 由于空间的切换，内核栈必须重置。\\
+			设置线程指针寄存器tpidr\_el1：当前的执行流相当于第一个kthread，zircon定义了一个线程对象表示它，然后把指针存到寄存器tpidr\_el1 。
+			将来运行过程中，主要通过这个指针寄存器的切换实现任务的切换。Linux kernel for RISCV也有对应的实现机制：
+			寄存器TP在启动阶段指向idle task，TP始终指向当前任务，切换任务时切换TP。
+			设置percpu管理数组：现在只需要为Primary Hart设置，对应于percpu的0号元素。
+			\item 再次采样计数器ticks，减去开始时的ticks，度量第一阶段的启动速度。
+			\item 准备跳转lk\_main，进入C世界\\
+			以上只是primary cpu的执行流程，对于arm64，开始只有一个ID为0的cpu作为primary启动，随后必须由它去启动其它cpus。
+		\end{enumerate}
+	\end{frame}
+
+	\subsection{C入口lk\_main}
+	
+	\begin{frame}
+		\frametitle{2 C入口lk\_main}
+		\begin{enumerate}
+			\item 初始化线程上下文\\
+			初始化线程链表
+			初始化percpu的boot\_cpu信息
+			构造本cpu的idle线程，加入线程列表，idle作为cpu的保底调度线程
+			\item 早期日志初始化
+			\item 动态Hook：从Earliest ~ Arch\_early\\
+			只有一个Hook，init\_build\_id用于生成版本和编译ID
+			\item 体系结构早期初始化：Arch\_early\_init\\
+			(1)Cpu早期初始化
+			(2)Percpu早期初始化
+			(3)设置异常向量入口
+			(4)保存cpu features
+			(5)启用中断
+			(6)MMU早期初始化：初始化ASID分配器
+			\item 动态Hook：从Arch\_early ~ Platform\_early
+			\item 保存handoff地址，这个是上阶段bootloader传递数据的入口
+			\item 平台早期初始化：platform\_early\_init\\
+			(1)设置一个系统保留内存区域的链表rev\_list，按照地址从小到大排列。
+			先把kernel image本身占据的区间加入rev\_list。\\
+			(2)从PhysHandoff发现所有的内存区域，分别处理
+			\begin{block}{}
+				zCore中，我们通过解析DTB，执行同样的逻辑。
+			\end{block}
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{2 C入口lk\_main}
+		\begin{enumerate}\setcounter{enumi}{8}
+			\item 处理NVRAM：该区域主要用作crashlog和tracelog，加入rev\_list。
+			\item 处理Common内存区域。包括三类：RAM/Peripheral/Reserve。
+			\item 处理RAM：加入mem\_arena数组，上限16个。\\
+			Zircon对物理内存的概念是三级：Node、Arena和Page。
+			Node可以由一至多个Arena构成，每个Arena内部地址是连续的，内部特性是一致的。
+			每个Arena在自己管理区域的顶端位置，设置一个page\_array\_数组，每元素对应维护本区域的页面属性。
+			\begin{block}{}
+				zCore目标平台采取NUMA的可能性不大，可忽略Node；但是仍可能存在多个Arena，所以保留mem\_arena数组，上限数量16应该是充足的。
+			\end{block}
+			\item Peripheral：映射到Kernel image之前的区域中，即KERNEL\_BASE之前。上限4个。
+			\item Reserve：其它系统保留用途的内存区域，加入rev\_list。
+			\item 解析命令行，处理针对debuglog和串口的参数。查看是否需要执行物理内存扫描检查。
+			\begin{block}{}
+				zCore解析dtb，chosen.bootargs对应命令行，chosen.stdout-path对应默认输出设备，进而解析对应uart设备的参数。
+			\end{block}
+			\item 把ram disk占据区间加入rev\_list
+			\item 如果memory limit存在，对所有的arena区域执行limit交集处理。
+			\item 对所有的arena区域与rev\_list执行交集检查，裁剪排除被保留的部分。
+			\item 所有保留区域的Page设置为wired，表示被系统保留
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{2 C入口lk\_main}
+		\begin{enumerate}\setcounter{enumi}{8}
+			\item 系统驱动初始化：包括Uart、gic、watchdog、timer、psci，power
+			\item 动态Hook：从Platform\_early ~ Arch\_prevm。初始化timer和全局随机数种子发生器。
+			\item 虚拟内存初始化准备（体系结构相关）：arch\_prevm\_init
+			\item 动态Hook：从Arch\_prevm ~platform\_prevm
+			\item 虚拟内存初始化准备（平台相关）：platform\_prevm\_init\\
+			(1)内核空间惯例初始化：以根vmar为树根的树形管理，每一个结点代表位于父节点区间内的子区间
+			(2)初始化physmap vmar：对应于前面布局中的physmap区域
+			\item 动态Hook：从platform\_prevm ~ vm\_preheap
+			\item 堆初始化前准备vm\_init\_preheap\\
+			(1)内存地址空间初始化\\
+			建立vmar的树表示kernel aspace\\
+			root\_vmar树根下，建立三个子vmar(对应前面的虚拟内存布局)：\\
+			Vmar\_physmap：物理内存空间直接映射(按照512G，可认为就是全部物理内存空间)\\
+			Vmar\_image：内核image 自身占据区域\\
+			Vmar\_heap：从\&\_end开始的堆区域\\
+			(2)Vmar正式加入树(Activate vmar)：\\
+			前置检查vmar在parent的范围内，且与当前所有的兄弟不冲突。\\
+			(3)分配vmar：在parent区间中寻找一块未使用的和符合对齐要求的区间\\
+			(4)遍历boot allocator，把目前已经分配出去Page标记为wired进行保留\\
+			(5)分配一页作为只读的Zero Page，供整个系统使用\\
+			(6)匿名页面请求器初始化
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{2 C入口lk\_main}
+		\begin{enumerate}\setcounter{enumi}{10}
+			\item 动态Hook：从vm\_preheap ~ heap：仅一个HOOK，初始化内存越界检查机制asan
+			\item 初始化堆heap\_init\\
+			(1)初始化分配器cmpct，每次heap\_grow增加256K空间\\
+			(2)扩展堆heap\_grow：优先使用缓存，没有缓存时从pmm申请\\
+			* Cmpct相当于Linux kernel的buddy system；Pmm的Node和Area对应于pgdat和zone
+			\item VirtualAllocat基于堆实现\\
+			(1)通过BitmapAlloc从位图中查找并标记分配\\
+			(2)从cmpct中申请物理Page\\
+			(3)把物理Page映射到虚拟空间，返回地址
+			\item 动态Hook：heap ~ vm，包括如下几个hook
+			\item 资源系统初始化Hook\\
+			mmio资源：64位空间for mmio\\
+			中断资源：全局中断控制器gic，irq资源\\
+			系统资源：ioport，root，smc，system，count
+			\item Version打印Hook
+			\item 控制台初始化Hook：即对Console参数的处理和分配缓冲区
+			\item 虚拟内存初始化vm\_init
+			\item 地址空间空隙保护\\
+			physmap虚拟空间中可能存在gap区域，对它们设置特殊属性，禁止访问
+			\item 对所有直接映射的Arenas区域进行保护：所有的Arena区域都不可执行
+			\item 针对内核image各段(代码段、数据段)的特性进行保护
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{2 C入口lk\_main}
+		\begin{enumerate}\setcounter{enumi}{20}
+			\item 对vmar\_physmap执行保护策略
+			\item 设置threshold(即水位)，当前可分配空间低于该界限时自动从pmm填充
+			\item 动态Hook：vm ~ topology\\
+			(1)从Handoff解析topology信息，填充管理cpu的层次结构\\
+			如果zCore目标平台不涉及NUMA，只要初始化一个cpu管理数组\\
+			(2)如果存在periph vmar，对其设置保护策略\\
+			\item NUMA初始化：略过
+			\item 动态Hook：topology ~ kernel
+			\item 内核初始化：kernel\_init
+			\item 动态Hook：kernel ~ threading\\
+			(1)初始化pmm前端页面缓存\\
+			为每个cpu设置一定数量的Pages作为缓存，避免每次都要从pmm中申请\\
+			(2)缓冲区链初始化buffer\_chain\_cache\_init\\
+			Zircon的buffer类似于linux kernel的buffer，可以跨多个Page，但是它们主要的服务对象是通道对象Channel。所以这个链的作用相当于Slab for channel。\\
+			(3)端口缓冲区初始化port\_observer\_cache\_init\\
+			为端口的observer和packet的分配提供缓冲页面，相当于Slab for port。\\
+			(4)代码覆盖率检测机制初始化InitSancov\\
+			(5)写时拷贝缓冲区初始化InitCowPages：预留一部分Pages专用于该目的\\
+			(6)初始化Percpu数组\\
+			每个cpu按照逻辑ID在percpu数组中对应一个管理对象，其中0号时Primary cpu。\\
+			启动早期已经初始化Primary cpu，现在完成其它secondary cpus。
+			\item 启动bootstrap2线程，在线程中开启下一阶段的启动\\
+			创建启动线程见3；bootstrap2的执行逻辑见4。
+		\end{enumerate}
+	\end{frame}
+
+	\subsection{启动内核线程，准备第二阶段启动}
+	
+	\begin{frame}
+		\frametitle{3 启动内核线程，准备第二阶段启动}
+		\begin{enumerate}
+			\item 线程结构Thread\\
+			(1)调度器scheduler\_state：调度相关，例如优先级\\
+			(2)等待队列wait\_queue\_state：在等待队列中的接入点\\
+			(3)任务task\_state：任务相关，记录执行入口entry和启动参数arg\\
+			(4)抢占preemption\_state：抢占相关\\
+			\item 创建线程实例CreateEtc\\
+			(1)分配一个线程实例\\
+			(2)在task\_state中记录entry 和 arg\\
+			(3)通过调度器初始化该线程，作用在scheduler\_state上\\
+			(4)设置线程栈\\
+			(4.1)从内核空间的root\_vmar中分配子vmar，大小根据本体系结构的默认栈大小值\\
+			(4.2)分配COW页面，返回封装它们的VMO对象\\
+			(4.3) 为VMO对象在虚拟空间建立映射，然后触发fault in，完成内容的填充\\
+			(4.4)根据体系结构的要求，初始化栈帧\\
+			(4.5)把线程推入thread list\\
+			\item 脱离父线程Detach
+			标记本线程detached
+			\item 恢复(或启动)线程\\
+			主要通过Scheduler::Unblock解除线程的阻塞状态，实现恢复或者启动\\
+			(1)取时间戳\\
+			(2)取目标CPU，然后根据cpu逻辑号找到对应的scheduler实例\\
+			(3)设置线程状态为ready，推入scheduler的调度队列\\
+			(4)请求reschedule，促使该线程被调度到
+		\end{enumerate}
+	\end{frame}
+
+	\subsection{在内核线程中，执行第二阶段启动}
+	
+	\begin{frame}
+		\frametitle{4 第二阶段启动bootstrap2(在内核线程中执行)}
+		\begin{enumerate}
+			\item 设置当前线程的CPU亲和性(绑定primary cpu)\\
+			当前线性继续代表Primary CPU执行初始化，因此必须绑定在primary cpu上。
+			\item 动态Hook：Threading ~ Arch
+			\item 对象初始化Hook\\
+			(1)为Handle准备存储区域：分配一部分Pages作为作为分配handle的缓存\\
+			(2)初始化Executor：系统调用与底层内核资源的中间层\\
+			(3)创建root\_job以及它的Handle
+			\item 全局随机数发生器Hook：建立并保证线程安全
+			\item 死锁检测
+			\item 定时器初始化：启用时钟中断，设置时钟stream模式
+			\item DPC初始化：Deffered Procedure Calls\\
+			每个cpu的percpu维护一个DPC队列，保存延迟调用的任务。
+			通常用于减轻中断处理的任务，从中断上下文转到普通上下文中处理。
+			\item 体系结构初始化arch\_init
+			\item 初始化percpu关于中断的部分，然后让本cpu上线，并启用IPI中断
+			\item 为每个secondary cpu创建IDLE Thread（Primary 的之前已经建立）
+			\item 动态Hook：Arch ~ Platform
+			\item 性能监控Hook：perfmon\_init
+			\item 初始化debug端口Hook：Debug Port用于从外部连接和调试Soc
+			\item 平台初始化platform\_init
+			\item 注册CPU逻辑ID与物理ID的映射表
+			\item 为所有secondary cpu准备内核栈
+			\item 唤醒启动所有的secondary cpus
+			\item 启动一个线程，用于检查是否所有的cpu都已经成功启动\\
+			具体实现方法：等待mp\_state.online\_cpus位图的所有有效位都已经置一 (每个CPU启动成功后会在对应位上置一)
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{4 第二阶段启动bootstrap2(在内核线程中执行)}
+		\begin{enumerate}
+			\item 内核驱动后期初始化：\\
+			(1)Uart的后期初始化\\
+			(2)Gic、hdmi、rng、watchdog后期初始化
+			\item 动态Hook：Platform ~ Arch\_late\\
+			(1)调试日志hook：启动debuglog线程\\
+			(2)全局随机数发生器Hook：生成种子\\
+			(3)时间段度量机制初始化\\
+			(4)所有cpu启动计数
+			\item 体系结构后期初始化Arch\_late\_init\\
+			标记当上下文切换时，分支预测器是否需要刷新
+			\item 动态Hook：Arch\_late ~ Last：\\
+			现在仅有一个Hook：User\\
+			(1)显式内核启动后空闲的页面数量\\
+			(2)初始化计数器，记录zircon 从启动开始到完成的总时间。\\
+			(3)初始化Shell：启动主控台\\
+			(4)初始化资源过滤器：对资源进行保护\\
+			目前把RAM加入过滤器，不允许userspace直接访问；但是允许直接访问reserve的RAM区域，因为有可能用户进程在其中有mmio区间。\\
+			(5)初始化Trace：ktrace\_init\\
+			(6)启动线程处理全局随机数发生器\\
+			(7)用户态初始化userboot\_init\\
+			以下开启下一阶段，将从内核态转入用户态。流程概述\\
+			(7.1)Userboot\_init先做准备工作(详见5) ，最后启动一个线程做后续工作\\
+			(7.2)在线程中，通过vdso启动第一个用户态程序UserBoot(详见6)\\
+			(7.3)UserBoot依然是系统的一部分，它负责启动第一个真正有用的用户程序(zCore目前就是sh)
+		\end{enumerate}
+	\end{frame}
+
+	\subsection{准备启动用户态程序userboot\_init}
+	
+	\begin{frame}
+		\frametitle{5 准备启动用户态程序userboot\_init}
+		\begin{enumerate}
+			\item 构造消息包packet，作为句柄数组的载体，该消息将来会通过通道channel传给进程
+			\item 通过工厂ProcessDispatcher来创建进程process\\
+			(1)在root\_job下构建一个process\\
+			(2)创建process工厂的句柄\\
+			(3)创建vmar工厂的句柄\\
+			(4)返回上述句柄
+			\item 创建进程对象process和地址区间对象vmar的句柄，填充到句柄数组中
+			\item 分配资源句柄，填充到句柄数组中\\
+			主要资源包括root, mmio, irq, smc, system以及root\_job，这些资源的句柄将被传递给process供它使用。
+			\item 创建和获取各vdso和vmo对象\\
+			vDSO都是ELF格式的对象，类似于DSO。\\
+			区别是vDSO是kernel直接在地址空间中分配并填充构成的。\\
+			(1)通过申请空间和初始化vDSO基础结构\\
+			(2)创建常量，填充到vDSO\\
+			(3)Patch vDSO，加入必要的系统调用\\
+			(4)通过bootstrap\_vmos，获取各种参数填充vDSO\\
+			(5)把vDSO的句柄和ZBI的句柄都填充到句柄数组
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{5 准备启动用户态程序userboot\_init}
+		\begin{enumerate}
+			\item 构造channel，包括两端，内核端和进程端\\
+			(1)通过channel的内核端，把前面创建的消息写入channel\\
+			(2)channel用户端会在process启动时交给它\\
+			进程一旦启动，就能够从channel中读消息，取出句柄数组
+			\item 把userboot\_image映射到vmar管理的空间中\\
+			(1)Image包含userboot本身和紧跟的vdso，它们作为进程root\_vmar的子vmar被分别映射到虚拟空间\\
+			(2)返回两个关键信息，userboot的执行入口entry和vdso\_base地址\\
+			\item 映射栈
+			\item 创建用户进程中的首个线程\\
+			类似于Process，通过ThreadDispatcher，即线程工厂创建线程。\\
+			但是该线程的启动比较特殊，在切换运行状态的同时，完成线程启动。\\
+			(1)伪造栈帧现场，做好返回用户态的准备\\
+			关键是两个参数：线程entry作为epc，线程栈作为ustack pointer。\\
+			(2)处理待决信号(pending signal)：这里正是处理信号的时机\\
+			(3)切换到用户态arch\_enter\_uspace(iframe)\\
+			禁止中断，基于前面伪造的返回现场，通过eret指令返回用户态执行entry，此后就是在userspace执行逻辑。
+			\item 已经完成从内核态到用户态的切换，执行第一个用户态程序UserBoot(详见6)
+		\end{enumerate}
+	\end{frame}
+
+	\subsection{第一个用户态程序userboot}
+
+	\begin{frame}
+		\frametitle{6 第一个用户态程序userboot}
+		\begin{enumerate}
+			\item 入口\_start(zx\_handle\_t arg)\\
+			arg参数就是由内核创建的channel的用户端
+			\item 从channel读出消息，取出所有句柄
+			\item 通过对应句柄，获取vmar对象和process对象
+			\item 通过句柄从ZBI中取得bootfs，这是一个简单的文件系统
+			\item 从ZBI中取得命令行参数
+			\item 加载真正的用户态进程(init/sh等)，移交执行权，此刻系统启动阶段完成
+			\item 本进程正常退出zx\_process\_exit(0)
+		\end{enumerate}
+	\end{frame}
+
+	\subsection{Secondary CPUs初始化与启动过程总结}
+
+	\begin{frame}
+		\frametitle{7 Secondary CPUs初始化与启动过程总结}
+		\begin{enumerate}
+			\item 确保在E1态运行
+			\item 启用icache/dcache/ucache
+			\item 取得跳板页目录地址和正式根目录地址
+			\item 等待prime的通知，启用mmu分页
+			\item 等待secondary boot信号，开始正式运行
+			\item 设置栈\\
+			(1) primary cpu在发出secondary boot信号前，按照cpu总数为其它所有的cpu准备好栈空间(地址连续)\\
+			(2) 这里secondary cpu根据自己的逻辑ID定位对应的栈\\
+			\item 进入secondary入口执行arm64\_secondary\_entry\\
+			(1)初始化percpu结构\\
+			(2)设置本cpu异常入口\\
+			(3)获取本cpu features\\
+			(4)启用中断\\
+			(5)等待secondaries\_released信号\\
+			该信号在primary\_cpu在arch\_init中为所有secondary cpus创建IDLE thread之后。
+			\item 构造Thread，继续执行初始化任务
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{7 Secondary CPUs初始化与启动过程总结}
+		\begin{enumerate}
+			\item 执行动态hook，从Earliest ~ Threading\\
+			注意：各种hook在注册时，指定了适用的目标。\\
+			大多数HOOK的标识是LK\_INIT\_FLAG\_PRIMARY\_CPU，即只对primary cpu有效。\\
+			只有少数标记为LK\_INIT\_FLAG\_SECONDARY\_CPUS或LK\_INIT\_FLAG\_ALL\_CPUS的Hook会在这被执行。
+			\item 初始化cpu的根中断管理器
+			\item 进入线程执行最后阶段的初始化\\
+			(1)Percpu的后期初始化：针对体系结构的特殊要求\\
+			(2)动态Hook：Threading~Last\\
+			(3)死锁检测
+			\item secondary cpu执行初始化任务的线程退出\\
+			(1)从调度器中删除本线程\\
+			(2)执行Thread::Current::Exit()退出\\
+			(2.1)标记本线程状态death\\
+			(2.2)设置返回码\\
+			(2.3)清理资源\\
+			如果是标记了Detached的线程，自己清理资源，然后直接从全局线程list中删除；\\
+			否则需要通知parent thread清理资源(Parent正在阻塞等待本线程退出)。\\
+			(2.4)执行重调度RescheduleInternal，切换到其它线程\\
+			Secondary cpu在启动阶段，没有其它的线程或进程在执行，所以退回到本cpu的IDLE Thread。
+		\end{enumerate}
+	\end{frame}
+
+	\subsection{Prime CPU成为IDLE}
+
+	\begin{frame}
+		\frametitle{8 Prime CPU成为IDLE}
+		\begin{enumerate}
+			\item 设置名称“idle [cpuid]”
+			\item 标记本线程是IDLE
+			\item 从调度器中删除，不参与调度，idle就是垫底的
+			\item 线程设置running状态
+			\item 设置当前CPU是active状态，表示活动中
+			\item 设置pending for preemption状态，确保重调度reschedule可以执行
+			\item 启用preempt抢占机制
+			\item 启用本CPU的中断
+			\item 进入无限循环等待状态
+		\end{enumerate}
+	\end{frame}
+
 	%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	%	Demo
 	%!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	
+	\begin{frame}
+		\frametitle{X XXX}
+		\begin{enumerate}
+			\item XXXX
+			\begin{block}{}
+				XXXX
+			\end{block}
+			\item XXXX
+		\end{enumerate}
+	\end{frame}
 
 	\section{Text Examples}
 
