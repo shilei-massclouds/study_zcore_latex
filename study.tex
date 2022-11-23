@@ -72,7 +72,7 @@
 	\end{frame}
 
 	\subsection{引导阶段}
-	
+
 	\begin{frame}
 		\frametitle{1 入口\_start}
 		\begin{enumerate}
@@ -335,13 +335,13 @@
 			\# save sp, sstatus, sepc\\
 			… …\\
 			STORE\_SP t2, 33         \# save sepc\\
-			\vspace {8pt} 
+			\vspace {8pt}
 			/* Load the global pointer */\\
 			.option push\\
 			.option norelax\\
 			la gp, \_\_global\_pointer\$\\
 			.option pop\\
-			\vspace {8pt} 
+			\vspace {8pt}
 			andi t1, t1, 1 << 8     \# sstatus.SPP = 1\\
 			beqz t1, end\_trap\_from\_user\\
 			end\_trap\_from\_kernel:
@@ -349,7 +349,7 @@
 	\end{frame}
 
 	\section{Zircon架构与实现参考}
-	
+
 	\begin{frame}
 		\begin{center}
 			{\LARGE 参照Zircon对zCore调整补充的建议\\}
@@ -420,7 +420,7 @@
 				\includegraphics[width=0.6\linewidth]{zircon_aspace.png}
 				\caption{Zircon空间映射布局}
 			\end{figure}
-		
+
 			\begin{block}{}
 				可以借鉴zircon这个办法：规划时先定分页模式(默认4级页表，相当于RISCV的SV48) ，再根据模式定参数(KERNEL\_BASE和KERNEL\_ASPACE\_BASE)，划分出各区域；
 				实现中通过kernel vmar管理该布局。
@@ -446,7 +446,7 @@
 	\end{frame}
 
 	\subsection{C入口lk\_main}
-	
+
 	\begin{frame}
 		\frametitle{2 C入口lk\_main}
 		\begin{enumerate}
@@ -522,6 +522,12 @@
 			(1)内核空间惯例初始化：以根vmar为树根的树形管理，每一个结点代表位于父节点区间内的子区间
 			(2)初始化physmap vmar：对应于前面布局中的physmap区域
 			\item 动态Hook：从platform\_prevm ~ vm\_preheap
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{2 C入口lk\_main}
+		\begin{enumerate}\setcounter{enumi}{8}
 			\item 堆初始化前准备vm\_init\_preheap\\
 			(1)内存地址空间初始化\\
 			建立vmar的树表示kernel aspace\\
@@ -535,17 +541,18 @@
 			(4)遍历boot allocator，把目前已经分配出去Page标记为wired进行保留\\
 			(5)分配一页作为只读的Zero Page，供整个系统使用\\
 			(6)匿名页面请求器初始化
+			\item 动态Hook：从vm\_preheap ~ heap：仅一个HOOK，初始化内存越界检查机制asan
+			\item 初始化堆heap\_init\\
+			(1)初始化分配器cmpct，每次heap\_grow增加256K空间\\
+			(2)扩展堆heap\_grow：优先使用缓存，没有缓存时从pmm申请\\
+			Cmpct相当于Linux kernel的buddy system；\\
+            Pmm的Node和Area对应于pgdat和zone
 		\end{enumerate}
 	\end{frame}
 
 	\begin{frame}
 		\frametitle{2 C入口lk\_main}
 		\begin{enumerate}\setcounter{enumi}{10}
-			\item 动态Hook：从vm\_preheap ~ heap：仅一个HOOK，初始化内存越界检查机制asan
-			\item 初始化堆heap\_init\\
-			(1)初始化分配器cmpct，每次heap\_grow增加256K空间\\
-			(2)扩展堆heap\_grow：优先使用缓存，没有缓存时从pmm申请\\
-			* Cmpct相当于Linux kernel的buddy system；Pmm的Node和Area对应于pgdat和zone
 			\item VirtualAllocat基于堆实现\\
 			(1)通过BitmapAlloc从位图中查找并标记分配\\
 			(2)从cmpct中申请物理Page\\
@@ -562,14 +569,14 @@
 			physmap虚拟空间中可能存在gap区域，对它们设置特殊属性，禁止访问
 			\item 对所有直接映射的Arenas区域进行保护：所有的Arena区域都不可执行
 			\item 针对内核image各段(代码段、数据段)的特性进行保护
+			\item 对vmar\_physmap执行保护策略
+			\item 设置threshold(即水位)，当前可分配空间低于该界限时自动从pmm填充
 		\end{enumerate}
 	\end{frame}
 
 	\begin{frame}
 		\frametitle{2 C入口lk\_main}
 		\begin{enumerate}\setcounter{enumi}{20}
-			\item 对vmar\_physmap执行保护策略
-			\item 设置threshold(即水位)，当前可分配空间低于该界限时自动从pmm填充
 			\item 动态Hook：vm ~ topology\\
 			(1)从Handoff解析topology信息，填充管理cpu的层次结构\\
 			如果zCore目标平台不涉及NUMA，只要初始化一个cpu管理数组\\
@@ -595,7 +602,7 @@
 	\end{frame}
 
 	\subsection{启动内核线程，准备第二阶段启动}
-	
+
 	\begin{frame}
 		\frametitle{3 启动内核线程，准备第二阶段启动}
 		\begin{enumerate}
@@ -626,7 +633,7 @@
 	\end{frame}
 
 	\subsection{在内核线程中，执行第二阶段启动}
-	
+
 	\begin{frame}
 		\frametitle{4 第二阶段启动bootstrap2(在内核线程中执行)}
 		\begin{enumerate}
@@ -648,6 +655,12 @@
 			\item 为每个secondary cpu创建IDLE Thread（Primary 的之前已经建立）
 			\item 动态Hook：Arch ~ Platform
 			\item 性能监控Hook：perfmon\_init
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{4 第二阶段启动bootstrap2(在内核线程中执行)}
+		\begin{enumerate}
 			\item 初始化debug端口Hook：Debug Port用于从外部连接和调试Soc
 			\item 平台初始化platform\_init
 			\item 注册CPU逻辑ID与物理ID的映射表
@@ -655,12 +668,6 @@
 			\item 唤醒启动所有的secondary cpus
 			\item 启动一个线程，用于检查是否所有的cpu都已经成功启动\\
 			具体实现方法：等待mp\_state.online\_cpus位图的所有有效位都已经置一 (每个CPU启动成功后会在对应位上置一)
-		\end{enumerate}
-	\end{frame}
-
-	\begin{frame}
-		\frametitle{4 第二阶段启动bootstrap2(在内核线程中执行)}
-		\begin{enumerate}
 			\item 内核驱动后期初始化：\\
 			(1)Uart的后期初始化\\
 			(2)Gic、hdmi、rng、watchdog后期初始化
@@ -669,6 +676,12 @@
 			(2)全局随机数发生器Hook：生成种子\\
 			(3)时间段度量机制初始化\\
 			(4)所有cpu启动计数
+		\end{enumerate}
+	\end{frame}
+
+	\begin{frame}
+		\frametitle{4 第二阶段启动bootstrap2(在内核线程中执行)}
+		\begin{enumerate}
 			\item 体系结构后期初始化Arch\_late\_init\\
 			标记当上下文切换时，分支预测器是否需要刷新
 			\item 动态Hook：Arch\_late ~ Last：\\
@@ -689,7 +702,7 @@
 	\end{frame}
 
 	\subsection{准备启动用户态程序userboot\_init}
-	
+
 	\begin{frame}
 		\frametitle{5 准备启动用户态程序userboot\_init}
 		\begin{enumerate}
@@ -819,7 +832,7 @@
 	\end{frame}
 
 	\section{对zCore组织研究开发的建议}
-	
+
 	\begin{frame}
 		\begin{center}
 			{\LARGE 对zCore组织研究开发的建议\\}
@@ -827,7 +840,7 @@
 	\end{frame}
 
 	\subsection{zCore项目结构调整建议}
-	
+
 	\begin{frame}
 		\frametitle{zCore项目结构调整建议}
 		\begin{enumerate}
@@ -848,7 +861,7 @@
 	\end{frame}
 
 	\subsection{基于开源社区组织zCore研发的建议}
-	
+
 	\begin{frame}
 		\frametitle{基于开源社区组织zCore研发的建议}
 		\begin{enumerate}
@@ -870,7 +883,7 @@
 	\end{frame}
 
 	\subsection{基于zCore可能展开的研究方向的建议}
-	
+
 	\begin{frame}
 		\frametitle{基于zCore可能展开的研究方向的建议}
 		\begin{enumerate}
@@ -887,10 +900,10 @@
 	\end{frame}
 
 	\subsection{对zCore研发里程碑的补充建议}
-	
+
 	\begin{frame}
 		\frametitle{对zCore研发里程碑的补充建议}
-		
+
 		\begin{table}\resizebox{\linewidth}{!}{
 			\begin{tabular}{l l l l}
 				\toprule[2pt]
@@ -917,7 +930,7 @@
 							 2 在操作系统领域，成为国际化\\开源社区。} \\
 				\bottomrule
 			\end{tabular}
-			}			
+			}
 			\caption{zCore研发里程碑}
 		\end{table}
 	\end{frame}
@@ -925,9 +938,9 @@
 	\begin{frame}[plain]
 		\begin{center}
 			{\Huge The End}
-			
+
 			\bigskip\bigskip % Vertical whitespace
-			
+
 			{\LARGE 请老师们批评指正！}
 		\end{center}
 	\end{frame}
