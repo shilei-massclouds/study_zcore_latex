@@ -16,7 +16,10 @@
 \usepackage{palatino}
 \usepackage[default]{opensans}
 \usepackage{makecell}
-\usepackage[]{listings}
+\usepackage{listings}
+\def\pgfsysdriver{pgfsys -dvipdfmx.def}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
 
 \useinnertheme{circles}
 
@@ -522,7 +525,26 @@
 	\begin{frame}
 		\frametitle{2 C入口lk\_main}
 		\begin{enumerate}\setcounter{enumi}{8}
-			\item Peripheral：映射到Kernel image之前的区域中，即KERNEL\_BASE之前。上限4个。
+			\item Peripheral:
+            \begin{columns}[c]
+                \begin{column}{0.5\textwidth}
+                    \begin{center}
+                        映射到Kernel image之前的区域中, \\
+                        即KERNEL\_BASE之前。上限4个。
+                    \end{center}
+                \end{column}
+                \begin{column}{0.45\textwidth}
+                    \begin{tikzpicture}
+                        \node[rectangle, draw, minimum height=20pt, minimum width=64pt]
+                            (1) at (0pt,0pt) {kernel image};
+                        \node[rectangle, draw, minimum height=20pt, minimum width=64pt]
+                            (2) at (0pt,-20pt) {gap(0x10000)};
+                        \node[rectangle, draw, minimum height=20pt, minimum width=64pt]
+                            (3) at (0pt,-40pt) {peripheral map};
+                        \draw (30pt,-8pt) coordinate node[right, text=blue] {KERNEL\_BASE};
+                    \end{tikzpicture}
+                \end{column}
+            \end{columns}
 			\item Reserve：其它系统保留用途的内存区域，加入rev\_list。
 			\item 解析命令行，处理针对debuglog和串口的参数。查看是否需要执行物理内存扫描检查。
 			\begin{block}{}
