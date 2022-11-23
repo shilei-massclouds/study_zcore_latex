@@ -16,8 +16,37 @@
 \usepackage{palatino}
 \usepackage[default]{opensans}
 \usepackage{makecell}
+\usepackage[]{listings}
 
 \useinnertheme{circles}
+
+\lstset{
+    basicstyle      = \small\sffamily,
+    keywordstyle    = \color{blue},
+    commentstyle    = \color{red},
+    stringstyle     = \ttfamily,
+    flexiblecolumns,
+    numbers         = left,
+    showspaces      = false,
+    numberstyle     = \tiny,
+    captionpos      = b,
+    showstringspaces= false
+}
+
+\lstdefinestyle{Assembler}{
+    language    = [x86masm]Assembler,
+    basicstyle  = \small\sffamily,
+    numbers=left,
+    numberstyle=\tiny,
+    frame=tb,
+    tabsize=4,
+    columns=fixed,
+    showstringspaces=false,
+    showtabs=false,
+    keepspaces,
+    commentstyle=\color{red},
+    keywordstyle=\color{blue}
+}
 
 %----------------------------------------------------------------------------------------
 %	PRESENTATION INFORMATION
@@ -327,25 +356,20 @@
 
 	\begin{frame}
 		\frametitle{关于GP寄存器}
-		没有发现zCore内核里面用GP寄存器relaxing机制，建议可以参照linux kernel用一下这个riscv特色。
-		linker.ld中.data和.bss段之间定义一个\_\_global\_pointer\$
-		然后入口处启用paging前后各初始化一次gp寄存器
-		此外，外部crate trapframe在异常入口位置也要加一下，就在保存S态系统寄存器之后的位置
-		\begin{quote}
-			\# save sp, sstatus, sepc\\
-			… …\\
-			STORE\_SP t2, 33         \# save sepc\\
-			\vspace {8pt}
-			/* Load the global pointer */\\
-			.option push\\
-			.option norelax\\
-			la gp, \_\_global\_pointer\$\\
-			.option pop\\
-			\vspace {8pt}
-			andi t1, t1, 1 << 8     \# sstatus.SPP = 1\\
-			beqz t1, end\_trap\_from\_user\\
-			end\_trap\_from\_kernel:
-		\end{quote}
+		在zCore内核态启用relaxing机制, 参照linux kernel的办法。\\
+		(1)linker.ld中.data和.bss段之间定义一个\_\_global\_pointer\$\\
+		(2)在程序入口处\_start: 启用paging前后各初始化一次gp寄存器(汇编代码)\\
+		(2)外部crate trapframe在异常入口位置初始化gp寄存器, 就在保存S态系统寄存器之后的位置
+        \lstinputlisting[
+            style       =   Assembler,
+            caption     =   {\bf linker.ld: insert symbol \_\_global\_pointer\$},
+            label       =   {linker.ld}
+        ]{./Sources/linker.ld}
+        \lstinputlisting[
+            style       =   Assembler,
+            caption     =   {\bf \_start \& trapframe: load gp},
+            label       =   {start.rs}
+        ]{./Sources/start.rs}
 	\end{frame}
 
 	\section{Zircon架构与实现参考}
