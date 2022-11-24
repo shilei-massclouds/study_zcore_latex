@@ -548,10 +548,12 @@
 			\item Reserve：其它系统保留用途的内存区域，加入rev\_list。
 			\item 解析命令行，处理针对debuglog和串口的参数。
 			\begin{block}{}
-				zCore解析dtb，chosen.bootargs对应命令行，chosen.stdout-path对应默认输出设备，进而解析对应uart设备的参数。
+				解析dtb获得这些参数, chosen.bootargs对应命令行, chosen.stdout-path对应默认输出设备, \\
+                进而解析对应uart设备的参数。
 			\end{block}
             \item 查看是否需要执行物理内存扫描检查。\\
-            通常的检查方法：向内存单元写入该单元地址, 再读出, 检查一致性。可以表示为: *addr = addr;
+            通常的检查方法：向内存单元写入该单元地址, 再读出, 检查一致性。\\
+            可以表示为: *addr = addr;
 			\item 把ram disk占据区间加入rev\_list\\
             对于arm64, ZBI占用的物理内存空间即ram disk
 			\item 如果memory limit存在，对所有的arena区域执行limit交集处理。
@@ -563,7 +565,12 @@
 	\begin{frame}
 		\frametitle{2 C入口lk\_main}
 		\begin{enumerate}\setcounter{enumi}{8}
-			\item 系统驱动初始化：包括Uart、gic、watchdog、timer、psci，power
+			\item 系统驱动初始化: 包括Uart、gic、watchdog、timer、psci, power\\
+            初始化过程利用了C++的std::visit模式, 形式是visit(lambda, variant), \\
+            根据variant的具体类型, 调用相应的处理函数。以Uart为例, serial(variant)的类型是UartDriver,\\
+            这是抽象类型; 各种实际的串口驱动在DriverBase的帮助下，实现UartDriver并定义方法, \\
+            例如: ns8250(定义在system/ulib/uart/include/lib/uart/ns8250.h)就是实际的串口驱动。\\
+            默认情况下, serial是null驱动; 实际驱动将会在系统启动早期, 注册到serial, 此后可以被visit访问。
 			\item 动态Hook：从Platform\_early ~ Arch\_prevm。初始化timer和全局随机数种子发生器。
 			\item 虚拟内存初始化准备（体系结构相关）：arch\_prevm\_init
 			\item 动态Hook：从Arch\_prevm ~platform\_prevm
