@@ -546,11 +546,14 @@
                 \end{column}
             \end{columns}
 			\item Reserve：其它系统保留用途的内存区域，加入rev\_list。
-			\item 解析命令行，处理针对debuglog和串口的参数。查看是否需要执行物理内存扫描检查。
+			\item 解析命令行，处理针对debuglog和串口的参数。
 			\begin{block}{}
 				zCore解析dtb，chosen.bootargs对应命令行，chosen.stdout-path对应默认输出设备，进而解析对应uart设备的参数。
 			\end{block}
-			\item 把ram disk占据区间加入rev\_list
+            \item 查看是否需要执行物理内存扫描检查。\\
+            通常的检查方法：向内存单元写入该单元地址, 再读出, 检查一致性。可以表示为: *addr = addr;
+			\item 把ram disk占据区间加入rev\_list\\
+            对于arm64, ZBI占用的物理内存空间即ram disk
 			\item 如果memory limit存在，对所有的arena区域执行limit交集处理。
 			\item 对所有的arena区域与rev\_list执行交集检查，裁剪排除被保留的部分。
 			\item 所有保留区域的Page设置为wired，表示被系统保留
