@@ -76,7 +76,7 @@
 		{\large 从zCore起步，参与安全操作系统的研究工作：}
 		\begin{itemize}
 			\item {\large 发展一个面向AIoT领域的安全操作系统，以RISCV为主要目标体系结构，向上提供与Zircon保持同步的系统调用接口 以及 与Linux kernel保持兼容的系统调用接口。}
-			\item {\large 以Rust-lang为主要的实现语言，架构上参照Zircon的整体架构设计，具体细节参照Linux kernel(arch/riscv)。}
+			\item {\large 以Rust-lang为主要的实现语言，架构上参照Zircon的整体架构设计, 实现参考Linux kernel(arch/riscv), Redox等。}
 			\item {\large 通过开源社区的方式组织研究和开发，建立各层面开发者参与协作的通道，建立应用层面使用者的反馈通道。}
 		\end{itemize}
 		{\large 下面就目前进行的准备工作和对将来工作的设想做一个汇报：}
@@ -110,7 +110,10 @@
 		\begin{enumerate}
 			\item 通过select\_stack为primary hart查找和配置内核栈，为函数调用作准备
 			\begin{block}{}
-			建议这里不必按照固定的最大值（MAX\_HART\_NUM）为所有的harts预分配页。此时还不知道Harts的总数。可以只为primary hart在bss中预分配栈，等primary hart初始化过程中确定harts数量之后，再按需分配。启动secondary harts可以改一下，把它们的启动时机推后，具体想法后面会提到。
+			建议这里不必按照固定的最大值(MAX\_HART\_NUM)为所有的harts预分配页。
+            此时还不知道Harts的总数。可以只为primary hart在bss中预分配栈,
+            等primary hart初始化过程中确定harts数量之后，再按需分配。
+            启动secondary harts可以改一下，把它们的启动时机推后，具体想法后面会提到。
 			\end{block}
 			\item 进入primary hart的启动函数primary\_rust\_main
 			\item 清零BSS段
@@ -124,16 +127,19 @@
 	\begin{frame}
 		\frametitle{2 启动阶段页表设置boot\_page\_table}
 		\begin{enumerate}
-			\item 设置物理地址与虚拟地址相等的跳板页
+			\item 设置物理地址与虚拟地址恒等的跳板页
 			\item 从虚存开始地址映射物理空间的前128G
 			\item 基于SV39模式启用mmu
 			\begin{block}{}
-				目前zCore是固定采用sv39的模式。可以借鉴Linux kernel的方式，通过写后读轮流尝试sv57,sv48来自动检测所在硬件平台支持的最大模式。
+				目前zCore是固定采用sv39的模式。
+                可以借鉴Linux kernel的方式, 通过写后读satp轮流尝试sv57,sv48,
+                自动检测并启用所在硬件平台支持的最大模式。
 			\end{block}
-			\item 调整栈寄存器sp和返回地址寄存器ra，完成从物理空间到虚拟空间转换
-			\item 设置状态寄存器，从此允许kernel访问User页面
+			\item 调整栈寄存器sp和返回地址寄存器ra, 完成从物理空间到虚拟空间转换
+			\item 设置状态寄存器, 从此允许kernel访问User页面
 			\begin{block}{}
-				建议采取保守策略，默认情况下始终不开，即默认不允许内核直接访问用户页面，仅在必须执行kernel/user之间内存拷贝或设置的时候，再临时打开，操作完后随即关闭。
+				建议采取保守策略, 默认情况下始终不开, 即默认不允许内核直接访问用户页面。
+                仅在kernel/user之间执行内存拷贝或设置的时候, 再临时打开, 操作完后随即关闭。
 			\end{block}
 		\end{enumerate}
 	\end{frame}
@@ -143,10 +149,12 @@
 		\begin{enumerate}
 			\item 检查sbi是否支持HSM扩展，不支持则退化为单核系统
 			\begin{block}{}
-				HSM是OpenSBIv0.7之后才支持，可以考虑参考Linux kernel for riscv的处理方式：\\
+				HSM是OpenSBIv0.7之后才支持，可以参考Linux kernel for riscv的处理方式：\\
 				(1)这里不检查HSM的支持。\\
-				(2)把那个Atomic全局变量STARTED提前到\_start入口位置，用它保证只有一个Hart能通过，其它在STARTED变量spin等待。那个唯一能通过的就是Primary Hart。\\
-				(3)Primary Hart启动各secondary harts时，如支持HSM，就如当前的办法用SBI唤醒；不支持的，打开STARTED的封锁。
+				(2)把那个Atomic全局变量STARTED提前到\_start入口位置，用它保证只有一个Hart能通过,
+                其它在STARTED变量spin等待。那个唯一能通过的就是Primary Hart。\\
+				(3)Primary Hart启动各secondary harts时, 如支持HSM, 就如当前的办法用SBI唤醒;
+                不支持的, 打开STARTED的封锁, 让secondary hart开始自己的初始化过程。
 			\end{block}
 			\item 遍历设备树文件dtb，发现primary之外所有的hart，通过SBI启动它们，执行secondary的启动流程(见4)。
 			\begin{block}{}
@@ -168,11 +176,12 @@
 			\end{block}
 			\item zCore占用TP寄存器来维持hartid。
 			\begin{block}{}
-				对每个hart来说，0号系统寄存器就是harid只读寄存器，不必再占用tp寄存器。tp可以用来保持cpu逻辑ID或者直接保存对应percpu的引用指针。
+				在系统中, Hart的硬件ID不连续不能作索引, 所以不常用。
+                tp寄存器可以用来存储Hart逻辑ID或者直接保存对应percpu的引用指针。
 			\end{block}
 			\item 通过循环实现HART对应内核栈的定位。
 			\begin{block}{}
-				应该用索引+移位实现就可以吧？
+				应该不需要循环, 用索引+移位实现就可以吧？
 			\end{block}
 		\end{enumerate}
 	\end{frame}
@@ -195,8 +204,9 @@
 	\begin{frame}
 		\frametitle{5 primary\_main主函数}
 		\begin{block}{}
-			建议用一个Context包装原本的全局变量，在此处定义后(是局部变量)，作为参数一直传递下去，直至准备启动secondary harts
-			在准备启动secondary harts前，释放掉不再需要的，其它的用ARC和Mutex封装后clone，传递给那些secondary harts
+			可以考虑在这个主函数入口处, 用一个Context局部变量把那些仅在启动阶段有效的全局变量包装起来,
+            在此处定义后, 作为参数一直传递下去, 直至准备启动secondary harts。在准备启动secondary harts前,
+            释放掉不再需要的; 对于仍然有用的, 用ARC和Mutex封装后clone, 传递给那些secondary harts。
 		\end{block}
 		\begin{enumerate}
 			\item 日志初始化
@@ -220,7 +230,7 @@
 			\item 初始化全局的HEAP，类型BuddyAllocator，rust用global\_allocator进行标记：\\
 			BuddyAllocator的实现与Linux kernel的page\_alloc中定义的Buddy系统基本一致。
 			模板参数N指定Order桶的数量(27个)，桶采用单链表结构，此外用USIZE实现位图标记各级桶的空闲/占用情况。
-			\item 填充内存给全局HEAP
+			\item 填充少量内存页给全局HEAP
 			\item 在内核数据段中预先保留一段内存区域，调用transfer方法转给全局的HEAP，内部是调用BuddyAllocator的回收方法deallocate来实现的。
 			\item 回收方法deallocate：\\
 			与linux kernel实现类似：从待回收页块所在的Order开始，逐级向上检测它的伙伴块是否已经是空闲的。
@@ -237,12 +247,14 @@
 			用于提供内核虚存空间到物理地址空间的偏移值。
 			\begin{block}{}
 				初始化时用了固定数值0xffff\_ffc0\_8020\_0000作为vaddr\_base，我理解可以分解成三个值：\\
-				(1)内核在虚拟内存空间中的开始地址 ≈ 0xffff\_ffc0\_0000\_0000，这个值应该参数化。目前这个值适用于SV39，将来采用其它mmu模式，它也需要相应改变。\\
+				(1) 内核在虚拟内存空间中的开始地址 ≈ 0xffff\_ffc0\_0000\_0000，这个值应该参数化。目前这个值适用于SV39，将来采用其它mmu模式，它也需要相应改变。\\
 				(2) 0x8000\_0000这个值应该是利用RISCV平台的一个惯例，RAM的物理空间地址通常就是它。
 				这样计算va\_pa\_offset时可以消掉这个8，达成一个1G对齐的偏移，简化启动阶段页表初始化。但是这个惯例不是强制规范，依赖它可能导致一些意外。\\
-				(3) 0x20\_0000即RiscV64系统需要把Kernel image加载到RAM开始地址后面2M处，这个应该是SBI规范所规定的。
-				既然上面第2条不可靠，建议参照Linux kernel 和 zircon的通常做法，直接把第1条的那个值参数化后，作为vaddr\_base。
-				此外，初始化页表时应该以PMD的尺寸为粒度，PMD size是2M，符合第3条，可以保证对齐要求。
+				(3) 0x20\_0000即RiscV64系统需要把Kernel image加载到RAM开始地址后面2M处(正好是一个PMD长度),
+                这个应该是SBI规范所规定的。既然上面第2条不可靠, 建议参照Linux kernel 和 zircon的通常做法,
+                直接把第1条的那个值参数化后, 作为vaddr\_base。\\
+				(4) 对于kernel image本身的映射, 初始化页表时应该以PMD的尺寸为粒度,
+                PMD size是2M, 可以满足开始地址的对齐要求。
 			\end{block}
 		\end{enumerate}
 	\end{frame}
@@ -270,10 +282,10 @@
 			\item 遍历DTB发现所有的设备，把如下类型的设备加入管理列表\\
 			Uart，PCI，intc，Display和Net
 			\item 根中断控制器intc的初始化：\\
-			根中断控制器intc是Hart内置的中断控制器，接入三类中断：
-			(1)时钟中断：该中断是通过SBI从Machine模式转过来的，最主要的作用是协助调度器实现时间片资源管理。
-			(2)软件中断：也是通过SBI从Machine模式转过来的，用于实现IPI。
-			(3)外部中断：经由平台级中断控制器Plic的仲裁分配。
+			根中断控制器intc是Hart内置的中断控制器, 接入三类中断: \\
+			(1)时钟中断：该中断是通过SBI从Machine模式转过来的，最主要的作用是协助调度器实现时间片资源管理。\\
+			(2)软件中断：也是通过SBI从Machine模式转过来的，用于实现IPI。\\
+			(3)外部中断：经由平台级中断控制器Plic的仲裁分配。\\
 			\item 为时钟中断和软件中断注册handler：\\
 			对于时钟中断，每次发生中断时，都要通过SBI重置定时器，使之在固定的周期后再次触发。
 			\item 允许时钟中断和软件中断：就是在寄存器SIE上置相应位。
@@ -300,9 +312,9 @@
 			\item 核心数据结构RutimeExecutor:\\
 			每个Hart对应一个runtime(RutimeExecutor类型)，作用相当于linux kernel的idle kthread。
 			\begin{block}{}
-			zCore目前是根据固定数量来初始化runtime。
+			zCore目前是根据支持的最大数量来初始化runtime。
 			前面已经根据dtb信息获知实际Hart的数量，并建立了对应的hart数组，
-			所以这里可以根据实际数量来初始化runtime并作为资源纳入对应的hart进行管理，不必定义全局变量。
+			所以这里可以根据实际数量来初始化runtime并作为资源纳入对应的hart进行管理, 不必预先定义全局变量。
 			\end{block}
 			\item spawn生成一个由future包装的线程并加入待调度列表
 			\item 在关中断的条件下运行
@@ -323,12 +335,13 @@
 			\item 保存当前中断状态，开中断
 			\begin{block}{}
 				当前实现是分别使用读sstatus状态和set\_sie两个操作来完成。
-				实际上set\_sie封装的指令CSRRS，是一个设置新值同时返回旧值的原子操作，crate riscv实现时忽略了返回值。我们可以修改一下其实现。
+				实际上set\_sie封装的指令CSRRS就是一个设置新值同时返回旧值的原子操作,
+                只是crate riscv实现时忽略了返回值。我们可以修改一下其实现。
 			\end{block}
 			\item 进入等待状态，直到有中断发生时被唤醒。
 			\item 恢复等待前的中断状态
-			\item switch:\\
-			执行器executor之间通过switch实现切换，从这个角度，执行器就等同于Linux kernel的一个kthread，切换的机制相同。
+			\item switch: 执行器executor之间通过switch实现切换, 从这个角度,
+            执行器就等同于Linux kernel的一个kthread, 切换的机制相同。
 			\begin{block}{}
 				Switch入口处需要加内存屏障fence(iorw, iorw)。
 				即在当前执行体被切换出去之前，自己清算一下内存操作，让其它执行体可见。
@@ -347,7 +360,10 @@
 			\item Panic\\
 			\begin{block}{}
 				我们通常会用qemu来调试，遇到panic时qemu不会自己退出，还要输入ctl+A+X，写测试脚本时不方便。
-				建议在panic中把spin\_loop无限循环改为关机（sbi.legacy.shutdown或者srst.system\_reset with RESET\_TYPE\_SHUTDOWN)，这样panic就可以让qemu退出。
+				建议在panic中把spin\_loop无限循环改为关机, SBI提供了关机支持:\\
+                (1) sbi.legacy.shutdown或者\\
+                (2) srst.system\_reset with RESET\_TYPE\_SHUTDOWN\\
+                这样panic时就可以让qemu退出。
 			\end{block}
 			\item TicketMutex[kernel-sync/ticket.rs]
 			\begin{block}{}
@@ -432,7 +448,8 @@
 			目前还没有分配，所以start/end都设置成kernel image的结束地址\_end，这个也是传统上堆的开始处。
 			\item 初始化根页目录，在虚拟地址空间中线性偏移映射两个地址区间
 			\item 整个物理地址空间映射到虚拟地址空间的固定位置\\
-			参数KERNEL\_ASPACE\_BASE指定虚拟空间位置，0~ARCH\_PHYSMAP\_SIZE指定被映射的物理空间范围。在Arm64 ISA，ARCH\_PHYSMAP\_SIZE是512G，所以实质上是整个物理空间。
+			参数KERNEL\_ASPACE\_BASE指定虚拟空间位置, ARCH\_PHYSMAP\_SIZE指定被映射的物理空间范围。
+            在Arm64 ISA，ARCH\_PHYSMAP\_SIZE是512G，所以实质上是整个物理空间。
 			映射区域标识为MMU\_PTE\_KERNEL\_DATA\_FLAGS，即只允许读写。
 			\item 内核本身占据的物理空间映射到虚拟地址空间的固定位置（由参数KERNEL\_BASE决定）\\
 			映射区域标识为MMU\_PTE\_KERNEL\_RWX\_FLAGS，因为包含代码和数据，所以允许读写执行。
@@ -900,11 +917,12 @@
 	\begin{frame}
 		\frametitle{zCore项目结构调整建议}
 		\begin{enumerate}
-			\item 建议分别设立arch与platform两种目录
-			Zircon对这两种目录是区别对待的：\\
+			\item 建议分别设立arch与platform两种目录\\
+			Zircon对这两种目录是区别对待的: \\
 			(1)arch：对应体系结构，包含arm64和x86。这里面处理是特定于cpu指令架构的东西。\\
 			(2)platform: 对应于平台，涉及总线及外设标准。包括两类：\\
-			generic-arm是对应终端、嵌入式设备等soc平台；而pc对应的是传统的个人电脑或工作站。
+			(2.1)generic-arm是对应终端、嵌入式设备等soc平台;\\
+            (2.2)pc对应的是传统的个人电脑或工作站。\\
 			arch和platform两个维度可以正交，搭配出不同的组合。
 			例如，同一种arch可以配套不同的platform，而同一种platform也可以搭配不同的arch。
 			\item 建议取消kernel-hal\\
