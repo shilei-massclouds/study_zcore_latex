@@ -79,6 +79,7 @@
 			\item {\large 以Rust-lang为主要的实现语言，架构上参照Zircon的整体架构设计, 实现参考Linux kernel(arch/riscv), Redox等。}
 			\item {\large 通过开源社区的方式组织研究和开发，建立各层面开发者参与协作的通道，建立应用层面使用者的反馈通道。}
 		\end{itemize}
+        ~\\
 		{\large 下面就目前进行的准备工作和对将来工作的设想做一个汇报：}
 	\end{frame}
 
@@ -306,6 +307,8 @@
 		\end{enumerate}
 	\end{frame}
 
+	\subsection{异步调度支持}
+
 	\begin{frame}
 		\frametitle{10 PreemptScheduler}
 		\begin{enumerate}
@@ -348,6 +351,8 @@
 			\end{block}
 		\end{enumerate}
 	\end{frame}
+
+	\subsection{其它}
 
 	\begin{frame}
 		\frametitle{杂项}
@@ -956,20 +961,77 @@
 		\end{enumerate}
 	\end{frame}
 
+	\begin{frame}
+		\frametitle{基于开源与zircon并行发展的基本思路}
+        与Google Zircon并行发展:\\
+        兼容接口但是不限于它的接口，参考框架但是重新实现，借助生态但要保持开放独立不受控。
+        \begin{table}\resizebox{\linewidth}{!}{
+            \begin{tabular}{l l l}
+                \toprule[2pt]
+				\textbf{    } & \textbf{Zircon} & \textbf{zCore}\\
+                \midrule[1pt]
+				{系统调用接口} & {Zircon系统调用} & {兼容Zircon \& Linux 系统调用}\\
+                \hline
+                {主平台体系架构} & {Arm\&X86} & {RiscV等开放ISA为主}\\
+                \hline
+                \makecell[l]{开发方式\\} &
+				\makecell[l]{由商业公司Google一家主导\\仅是代码层面开源} &
+				\makecell[l]{由社区主导, 社区开放，成员平等\\基于开源社区进行协作, 成果共享}\\
+                \hline
+                {上层OS} & {Fuchsia} & {Fuchsia \& 类Fushia \& 类Linux发行版}\\
+                \hline
+                \makecell[l]{生态(应用层面)\\} &
+				\makecell[l]{Google与Android合作者建立新的Fuchsia应用生态,\\
+                             促使新应用的开发和Android应用的移植} &
+				\makecell[l]{(1)通过支持Fuchsia兼容Fuchsia应用\\
+                             (2)兼容直接基于Zircon的应用\\
+                             (3)兼容Linux应用}\\
+                \hline
+                \makecell[l]{生态(平台层面)\\} &
+				\makecell[l]{Google与基于ARM\&X86的厂商合作,\\
+                             促使CPU与硬件平台对新生态的支持, 促进驱动的开发和移植} &
+				\makecell[l]{基于RiscV等开放体系架构和开放平台开展合作, 尽力避免受制于人;\\
+                             在保持RiscV作为主平台地位的前提下, 可以开展向x86、ARM移植}\\
+                \hline
+                \makecell[l]{开发团队建设\\} &
+				\makecell[l]{Google内部团队负责核心部分的框架设计和开发\\} &
+				\makecell[l]{基于社区协作开发, 借鉴Zircon框架但是坚持完全重新实现,\\
+                             在开发和协作过程中学习和积累经验，并形成核心维护者团队}\\
+                \bottomrule
+            \end{tabular}
+        }
+        \caption{zCore与Zircon的关联与差异}
+        \end{table}
+	\end{frame}
+
 	\subsection{基于zCore可能展开的研究方向的建议}
 
 	\begin{frame}
 		\frametitle{基于zCore可能展开的研究方向的建议}
 		\begin{enumerate}
 			\item RUST语言对系统级开发的支持\\
-			总结在基于rust研发zCore过程中的经验，研究并提出rust改进方案，参与rust社区在支持系统级开发方面的工作。
+			总结在基于rust研发zCore过程中的经验, 研究并提出rust改进方案,\\
+            参与rust社区在支持系统级开发方面的工作。例如: \\
+            像core和alloc库中的许多方便有用的集合类型和宏, 由于隐含对GlobalAllocator的依赖,\\
+            在启动早期是不能用的。包括string、vec甚至format!宏等。我们可以简单扩展一下实现,\\
+            可以选择在栈上而不是在堆上预分配内存区间。自然这个预分配的内存区间是编译时定长的,\\
+            相关操作超出限制时, 需要报错。从模式上, 相当于Box的反向使用。
 			\item 基于RISCV体系结构的软硬件协同设计\\
-			RISCV作为一种开放式的体系架构，支持对其进行非标准扩展。
-			根据zCore的目标，重点针对安全性和关键性能方面，研究软硬件协同的设计方案，研究通过扩展ISA和硬件辅助提升安全性和性能的关键技术与实现。
+			RISCV作为一种开放式的体系架构, 支持对其进行非标准扩展。\\
+			根据zCore的目标, 重点针对安全性和关键性能方面, 研究软硬件协同的设计方案,
+            研究通过扩展ISA和硬件辅助提升安全性和性能的关键技术与实现。\\
+            初步想法: 可以先做非标扩展, 基于FPGA手段作研究和原型验证。进而可以基于研究成果,
+            对标准扩展作提案。例如: 'N'标准扩展就是针对用户中断的, 且仍处于草案阶段。
+            从OS与ISA协同设计的角度提出扩展方案, 应该是一个好的切入点。
 			\item 线程+异步混合调度机制\\
-			线程和异步各有自身特点和适用场景，不是替代关系。研究zCore同时支持这两种机制的方案。
-			\item “元编程”在系统级开发中的应用
-			基于zCore开发的实践，研究通过Rust语言的宏在高抽象层次表述对象的方法，研究形式化方法在系统设计和验证中的的应用。减少冗余代码，提高一致性和开发者的开发效率。
+			线程和异步各有自身特点和适用场景, 不是替代关系。研究zCore同时支持这两种机制的方案。
+			\item “元编程”在系统级开发中的应用\\
+			基于zCore开发的实践, 研究通过Rust语言的特性在高抽象层次表述对象的方法,\\
+            研究形式化方法在系统设计和验证中的的应用。减少冗余代码，提高一致性和开发者效率。\\
+            初步想法: 可以从两个层面的接口入手。第一是BootLoader和Kernel之间, 目前主要通过FDT或者ZBI
+            等形式传递: 第二是面向应用层的接口, 即系统调用。可以选择某种IDL中立语言或者形式化语言把要
+            传递的信息和方式描述出来, 设计一组工具链来生成代码: 包括适配各种语言的接口stub,
+            数据完整性、安全性检查, 跟踪与调试, 覆盖率检查及自动化测试的框架等。
 		\end{enumerate}
 	\end{frame}
 
